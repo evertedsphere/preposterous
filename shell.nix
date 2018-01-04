@@ -12,11 +12,12 @@ let
     overrides = rec {
       jailbreak = [ "cabal-helper" "ghc-mod" "liquidhaskell" ];
       skipHaddock = justStaticExecutables;
-      skipTests = [ "ghc-mod" ];
+      skipTests = [ "ghc-mod" "hpack" ];
       justStaticExecutables = [ 
         "brittany" 
         "hpack"
         "ghcid"
+        "hpack"
       ];
     };
   };
@@ -31,6 +32,12 @@ in
       brittany
       ghc-mod
       cabal-helper
+      hpack
+
+      text
+      bound
+      prettyprinter
+      lens
 
       # containers
       # logict
