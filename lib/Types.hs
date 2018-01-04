@@ -86,8 +86,13 @@ fresh = do
   modify (\t -> t { supply = x + 1 })
   pure x
 
-freshUnif :: TcM i UnifVar
-freshUnif = UnifVar . tshow <$> fresh
+freshUnif' :: TcM i TyVar
+freshUnif' = freshUnif "u"
+
+freshUnif :: Text -> TcM i TyVar
+freshUnif t = do
+  x <- fresh
+  pure (Unif (UnifVar (t <> tshow x)))
 
 data TcEnv i = TcEnv { bindings :: Map (Sym i) (Poly i), topLevelAxioms :: AxiomSch i }
 type TcWriter i = ()
@@ -115,6 +120,20 @@ instMono unif ty = pure ty
 instCst :: Subst i -> Cst i -> TcM i (Cst i)
 instCst unif cst = pure cst
 
+poly :: Mono i -> Poly i
+poly = Forall [] CstTriv
+
+infixr /\
+class Conj a where 
+  (/\) :: a -> a -> a
+
+instance Conj (Cst i) where (/\) = cstConj
+
+cstConj :: Cst i -> Cst i -> Cst i
+cstConj x CstTriv = x
+cstConj CstTriv x = x
+cstConj a b = CstConj a b
+
 -- | sch; env |-> prog
 wellTyped :: TcEnv i -> Prog i -> TcM i ()
 wellTyped env prog = pure ()
@@ -141,8 +160,16 @@ infer (ESym sym) = do
 infer (EApp e1 e2) = do
   (tau1, GenCst c1) <- infer e1
   (tau2, GenCst c2) <- infer e2
-  alpha             <- MonoVar . Unif <$> freshUnif
-  pure (alpha, GenCst (CstConj c1 c2 `CstConj` CstEq tau1 (MonoFun tau2 alpha)))
+  alpha             <- MonoVar <$> freshUnif'
+  let cst = c1 /\ c2 /\ CstEq tau1 (MonoFun tau2 alpha)
+  pure (alpha, GenCst cst)
+
+infer (ELam x e) = do
+  alpha    <- MonoVar <$> freshUnif'
+  (tau, c) <- local
+    (\t -> t { bindings = Map.insert (SymVar x) (poly alpha) (bindings t) })
+    (infer e)
+  pure (MonoFun alpha tau, c)
 
 infer e = pure (typ, gen)
  where
@@ -167,12 +194,18 @@ runTc ma = let (a, _, _) = runTcM initEnv initState ma in a
   initEnv :: TcEnv i
   initEnv = TcEnv bd AxiomTriv
    where
-    bd =
-      Map.fromList [(SymVar (Var "n"), Forall [] CstTriv (MonoPrim PrimInt))]
+    bd = Map.fromList
+      [ (SymVar (Var "n"), Forall [] CstTriv (MonoPrim PrimInt))
+      , ( SymVar (Var "id")
+        , Forall [SkolVar "a"]
+                 CstTriv
+                 (MonoFun (MonoPrim PrimInt) (MonoPrim PrimInt))
+        )
+      ]
 
   initState :: TcState i
   initState = TcState 0
 
 tests :: IO ()
 tests = do
-  print $ runTc $ infer (ESym (SymVar (Var "n")))
+  print $ runTc $ infer (EApp (ESym (SymVar (Var "id"))) (ESym (SymVar (Var "n"))))
