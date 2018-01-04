@@ -21,45 +21,24 @@ import           Control.Category ((>>>),(<<<))
 import           Data.List.NonEmpty (NonEmpty(..), (!!), nonEmpty)
 import Debug.Trace as Trace
 
-newtype Var = Var Text
-  deriving (Eq, Ord, Show)
-newtype UnifVar = UnifVar Text
-  deriving (Eq)
-newtype SkolVar = SkolVar Text
-  deriving (Eq)
-data TyVar = Unif UnifVar | Skol SkolVar
-  deriving (Eq)
+-- Names
 
-newtype DataCon = DataCon Text
-  deriving (Eq, Ord, Show)
-newtype TyCon = TyCon Text
-  deriving (Eq,Show)
+newtype Var = Var Text deriving (Eq, Ord, Show)
+newtype UnifVar = UnifVar Text deriving (Eq)
+newtype SkolVar = SkolVar Text deriving (Eq)
 
+newtype DataCon = DataCon Text deriving (Eq, Ord, Show)
+newtype TyCon = TyCon Text deriving (Eq,Show)
+
+data TyVar = Unif UnifVar | Skol SkolVar deriving (Eq)
+
+data Sym i = SymCon DataCon | SymVar Var deriving (Eq, Ord, Show)
+
+-- | Primitive types.
 data PrimTy = PrimInt | PrimBool
   deriving Show
 
 data Ct i = CtTriv | CtConj (Ct i) (Ct i) | CtEq (Mono i) (Mono i)
-
-instance Show UnifVar where showsPrec n (UnifVar v) = showString (Text.unpack v)
-instance Show SkolVar where showsPrec n (SkolVar v) = showString (Text.unpack v)
-
-instance Show TyVar where
-  showsPrec n (Unif v) = showsPrec n v
-  showsPrec n (Skol v) = showsPrec n v
-
-instance Show (Ct i) where
-  showsPrec _ CtTriv = shows ()
-  showsPrec n (CtConj l r) = showsPrec n l . showString " /\\ " . showsPrec n r
-  showsPrec n (CtEq l r) = showParen (n > 9) (showsPrec 9 l . showString " ~ " . showsPrec 9 r)
-
-instance Show (Mono i) where
-  showsPrec n (MonoVar v) = showsPrec n v
-  showsPrec n (MonoPrim p) = showsPrec n p
-  showsPrec n (MonoList ms) = showList ms
-  showsPrec n (MonoConApp (TyCon con) []) = showString (Text.unpack con)
-  showsPrec n (MonoConApp (TyCon con) ms) = showString (Text.unpack con) . showList ms
-  showsPrec n (MonoFun l r) = showParen (n > 0) (showsPrec 1 l . showString " -> " . shows r)
-
 newtype Prog i = Prog [Decl i]
   deriving Show
 data Decl i = Decl Var (Exp i) | DeclAnn Var (Poly i) (Exp i)
@@ -77,9 +56,6 @@ data Poly i = Forall [SkolVar] (Ct i) (Mono i)
 
 type Tau = Mono
 type Sigma = Poly
-
-data Sym i = SymCon DataCon | SymVar Var
-  deriving (Eq, Ord, Show)
 data Exp i = ESym (Sym i) | ELam Var (Exp i) | EApp (Exp i) (Exp i) | ECase (Exp i) (NonEmpty (Alt i))
   deriving Show
 
@@ -92,13 +68,30 @@ data Alt i = Alt DataCon [Var] (Exp i)
 data AxiomSch i = AxiomTriv | AxiomConj (AxiomSch i) (AxiomSch i) | AxiomImp [SkolVar] (Ct i) (Ct i)
   deriving Show
 
--- |  TODO "type annotations are closed"
--- data TcData i = Ann (Sym i) (Poly i)
-
 type Subst i = [(TyVar, Mono i)]
 type Unifier i = [(UnifVar, Mono i)]
 newtype GenCt i = GenCt (Ct i)
   deriving Show
+
+instance Show UnifVar where showsPrec n (UnifVar v) = showString (Text.unpack v)
+instance Show SkolVar where showsPrec n (SkolVar v) = showString (Text.unpack v)
+
+instance Show TyVar where
+  showsPrec n (Unif v) = showsPrec n v
+  showsPrec n (Skol v) = showsPrec n v
+
+instance Show (Ct i) where
+  showsPrec _ CtTriv = shows ()
+  showsPrec n (CtConj l r) = showsPrec n l . showString " /\\ " . showsPrec n r
+  showsPrec n (CtEq l r) = showParen (n > 9) (showsPrec 9 l . showString " ~ " . showsPrec 9 r)
+
+instance Show (Mono i) where
+  showsPrec n (MonoVar v) = showsPrec n v
+  showsPrec n (MonoPrim p) = showsPrec n p
+  showsPrec n (MonoList ms) = showList ms
+  showsPrec n (MonoConApp (TyCon con) ms) = showString (Text.unpack con) . showList ms
+  showsPrec n (MonoFun l r) = showParen (n > 0) (showsPrec 1 l . showString " -> " . shows r)
+
 
 --
 
@@ -108,23 +101,27 @@ fresh = do
   modify (\t -> t { supply = x + 1 })
   pure x
 
-freshUnif' :: TcM i TyVar
-freshUnif' = freshUnif "u"
+freshUnif :: TcM i TyVar
+freshUnif = freshUnifHint "u"
 
-freshUnif :: Text -> TcM i TyVar
-freshUnif t = do
+freshUnifHint :: Text -> TcM i TyVar
+freshUnifHint t = do
   x <- fresh
   pure (Unif (UnifVar (t <> tshow x)))
 
 freshMono :: TcM i (Mono i)
-freshMono = MonoVar <$> freshUnif'
+freshMono = MonoVar <$> freshUnif
 
 data TcEnv i = TcEnv { bindings :: Map (Sym i) (Poly i), topLevelAxioms :: AxiomSch i }
 type TcWriter i = ()
 data TcState i = TcState { supply :: Int }
 
+data TcErr
+  = ErrText Text
+  deriving Show
+
 newtype TcM i a = TcM
-  { unTcM :: RWST (TcEnv i) (TcWriter i) (TcState i) Identity a
+  { unTcM :: ExceptT TcErr (RWST (TcEnv i) (TcWriter i) (TcState i) Identity) a
   } deriving ( Functor
              , Applicative
              , Monad
@@ -132,6 +129,7 @@ newtype TcM i a = TcM
              , MonadWriter (TcWriter i)
              , MonadState (TcState i)
              , MonadRWS (TcEnv i) (TcWriter i) (TcState i)
+             , MonadError TcErr
              )
 
 simple :: GenCt i -> Ct i
@@ -141,7 +139,6 @@ freeUnifVars = undefined
 
 instMono :: forall i . Subst i -> Mono i -> TcM i (Mono i)
 instMono unif ty = foldM (\t (v, r) -> instMono1 v r t) ty unif
- where
 
 instMono1 :: TyVar -> Mono i -> Mono i -> TcM i (Mono i)
 instMono1 v r ty = case ty of
@@ -189,7 +186,7 @@ infer :: forall i . Exp i -> TcM i (Mono i, GenCt i)
 infer (ESym sym) = do
   rhs <- asks (Map.lookup sym . bindings)
   case rhs of
-    Nothing                  -> error "foo"
+    Nothing                  -> throwError (ErrText "Unknown symbol")
     Just (Forall as q1 tau1) -> do
       als <- for as $ \sk -> do
         ctr <- fresh
@@ -217,52 +214,50 @@ infer (ECase e alts@(Alt dcon vs _:|_)) = do
   (tau, GenCt c) <- infer e
 
   beta           <- freshMono
-  let num_gamma = length vs
+
+  rhs            <- asks (Map.lookup (SymCon dcon) . bindings)
+  Forall _ _ ty  <- unwrap rhs (ErrText "nonexistent data constructor")
+  (_, tycon, as) <- unwrap (toTyCon ty) (ErrText "not a data constructor!")
+  let num_gamma = length as
   gamma <- replicateM num_gamma freshMono
-  -- () <- asks bindings >>= Trace.traceShowM
-  -- () <- Trace.traceShowM dcon
-  -- let c' = CtEq tau
-  rhs   <- asks (Map.lookup (SymCon dcon) . bindings)
-  case rhs of
-    Nothing              -> error "nonexistent data constructor"
-    Just (Forall _ _ ty) -> do
-      let tycon = fromMaybe (error "not a data constructor!") (getTyCon ty)
-      let c'    = CtEq (MonoConApp tycon gamma) tau /\ c
-      let
-        go :: Ct i -> Alt i -> TcM i (Ct i)
-        go ct_prev (Alt k_i xs_i e_i) = do
-          rhs <- asks (Map.lookup (SymCon k_i) . bindings)
-          case rhs of
-            Nothing -> error "Unknown data-constructor in case"
-            Just (Forall as_i _q_i fn) -> do
-              let (vs_i, tycon') = fromMaybe (error "qux") (toTyCon fn)
-              unless
-                (tycon == tycon')
-                (error "Datacon in match different from head con of expression")
-              let sub   = zipWith (\a g -> (Skol a, g)) as_i gamma
-                  xvs_i = zip xs_i vs_i
-              bds <- for xvs_i $ \(x, v) -> do
-                v' <- instMono sub v
-                pure (SymVar x, poly v')
 
-              (tau_i, GenCt ct_i) <- local
-                ( \t ->
-                  t { bindings = Map.union (Map.fromList bds) (bindings t) }
-                )
-                (infer e_i)
-              let ct_new = ct_i /\ CtEq beta tau_i
-              pure ct_new
-      ct <- foldM go c' alts
-      pure (beta, GenCt ct)
+  let c' = CtEq (MonoConApp tycon gamma) tau /\ c
+  let go :: Ct i -> Alt i -> TcM i (Ct i)
+      go ct_prev (Alt k_i xs_i e_i) = do
+        Forall as_i _q_i fn <-
+          asks (Map.lookup (SymCon k_i) . bindings)
+            >>= (`unwrap` ErrText "Unknown data-constructor in case")
+        (vs_i, tycon', _) <- unwrap (toTyCon fn) (ErrText "???")
+        assert
+          (tycon == tycon')
+          (ErrText "Datacon in match different from head con of expression")
+        let sub   = zipWith (\a g -> (Skol a, g)) as_i gamma
+            xvs_i = zip xs_i vs_i
+        bds <- for xvs_i $ \(x, v) -> do
+          v' <- instMono sub v
+          pure (SymVar x, poly v')
 
+        (tau_i, GenCt ct_i) <- local
+          (\t -> t { bindings = Map.union (Map.fromList bds) (bindings t) })
+          (infer e_i)
+        let ct_new = ct_prev /\ CtEq beta tau_i
+        pure ct_new
+  ct <- foldM go c' alts
+  pure (beta, GenCt ct)
 
-toTyCon :: Mono i -> Maybe ([Mono i], TyCon)
+unwrap :: Maybe a -> TcErr -> TcM i a
+unwrap ma err = maybe (throwError err) pure ma
+
+assert :: Bool -> TcErr -> TcM i ()
+assert cond = unless cond . throwError
+
+toTyCon :: Mono i -> Maybe ([Mono i], TyCon, [Mono i])
 toTyCon = go []
  where
   go xs (MonoFun l r) = do
-    (xs', con) <- go xs r
-    pure (l : xs', con)
-  go xs (MonoConApp con _) = pure ([], con)
+    (xs', con, as) <- go xs r
+    pure (l : xs', con, as)
+  go xs (MonoConApp con as) = pure ([], con, as)
 
 getTy :: Mono i -> Maybe (Mono i)
 getTy m = case m of
@@ -285,10 +280,11 @@ solve given = pure (wanted, residual, unifier)
   residual = undefined
   unifier  = undefined
 
-runTcM :: TcEnv i -> TcState i -> TcM i a -> (a, TcState i, TcWriter i)
-runTcM r s ma = runRWS (unTcM ma) r s
+runTcM
+  :: TcEnv i -> TcState i -> TcM i a -> (Either TcErr a, TcState i, TcWriter i)
+runTcM r s ma = runRWS (runExceptT (unTcM ma)) r s
 
-runTc :: TcM i a -> a
+runTc :: TcM i a -> Either TcErr a
 runTc ma = let (a, _, _) = runTcM initEnv initState ma in a
  where
   initEnv :: TcEnv i
@@ -320,7 +316,13 @@ runTc ma = let (a, _, _) = runTcM initEnv initState ma in a
           CtTriv
           (MonoFun mska (MonoFun mskb (MonoConApp (TyCon "Pair") [mska, mskb])))
         )
+      , scon "Nothing" (Forall [ska] CtTriv (MonoConApp (TyCon "Maybe") [mska]))
+      , scon
+        "Just"
+        (Forall [ska] CtTriv (MonoFun mska (MonoConApp (TyCon "Maybe") [mska])))
       ]
+    svar x rhs = (SymVar (Var x), rhs)
+    scon x rhs = (SymCon (DataCon x), rhs)
     ska  = SkolVar "a"
     mska = MonoVar (Skol ska)
     skb  = SkolVar "b"
@@ -377,10 +379,43 @@ tests = do
   putStrLn "\nMkPair n"
   print $ runTc $ infer (EApp (econ "MkPair") (evar "n"))
 
+  putStrLn "\nNonExistentCon"
+  print $ runTc $ infer (econ "NonExistentCon")
+
   putStrLn "\nid (MkPair MkPair MkPair)"
   print $ runTc $ infer
     ( EApp (evar "id")
            (EApp (econ "MkPair") (EApp (econ "MkPair") (econ "MkPair")))
+    )
+
+  putStrLn "\n\\def -> \\ma -> case ma of Nothing -> def; Just x -> x"
+  print $ runTc $ infer
+    ( ELam
+      (var "def")
+      ( ELam
+        (var "ma")
+        ( ECase
+          (evar "ma")
+          (  Alt (DataCon "Nothing") [] (evar "def")
+          :| [Alt (DataCon "Just") [var "x"] (evar "x")]
+          )
+        )
+      )
+    )
+
+  putStrLn "\n\\def -> \\ma -> case ma of Just x -> x; Nothing -> def"
+  print $ runTc $ infer
+    ( ELam
+      (var "def")
+      ( ELam
+        (var "ma")
+        ( ECase
+          (evar "ma")
+          (  Alt (DataCon "Nothing") [] (evar "def")
+          :| [Alt (DataCon "Just") [var "x"] (evar "x")]
+          )
+        )
+      )
     )
  where
   var  = Var
