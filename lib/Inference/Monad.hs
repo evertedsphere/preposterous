@@ -4,20 +4,11 @@
 
 module Inference.Monad where
 
-import           Control.Category         ((<<<), (>>>))
 import           Control.Monad.Except
 import           Control.Monad.Identity
-import           Control.Monad.IO.Class
 import           Control.Monad.RWS.Strict hiding (Alt (..))
-import           Data.List.NonEmpty       (NonEmpty (..), nonEmpty, (!!))
 import           Data.Map                 (Map)
-import qualified Data.Map                 as Map
-import           Data.Maybe
-import           Data.Set                 (Set)
-import qualified Data.Set                 as Set
 import           Data.Text                (Text)
-import qualified Data.Text                as Text
-import           Data.Traversable
 
 import           Types
 

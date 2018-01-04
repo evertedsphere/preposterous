@@ -5,19 +5,12 @@
 module Inference.Engine where
 
 import           Control.Monad.Except
-import           Control.Monad.Identity
-import           Control.Monad.IO.Class
 import           Control.Monad.RWS.Strict hiding (Alt (..))
-import           Data.Set                 (Set)
-import           Data.Map                 (Map)
-import qualified Data.Set                 as Set
 import qualified Data.Map                 as Map
 import qualified Data.Text                as Text
 import           Data.Text                (Text)
-import           Data.Maybe
 import           Data.Traversable
-import           Control.Category ((>>>),(<<<))
-import           Data.List.NonEmpty (NonEmpty(..), (!!), nonEmpty)
+import           Data.List.NonEmpty (NonEmpty(..))
 
 import Types
 import Inference.Monad

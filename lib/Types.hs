@@ -1,24 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Types where
 
-import           Control.Monad.Except
-import           Control.Monad.Identity
-import           Control.Monad.IO.Class
-import           Control.Monad.RWS.Strict hiding (Alt (..))
-import           Data.Set                 (Set)
-import           Data.Map                 (Map)
-import qualified Data.Set                 as Set
-import qualified Data.Map                 as Map
 import qualified Data.Text                as Text
 import           Data.Text                (Text)
-import           Data.Maybe
-import           Data.Traversable
-import           Control.Category ((>>>),(<<<))
-import           Data.List.NonEmpty (NonEmpty(..), (!!), nonEmpty)
+import           Data.List.NonEmpty (NonEmpty)
 
 -- Names
 
@@ -59,9 +46,6 @@ type Tau = Mono
 type Sigma = Poly
 data Exp i = ESym (Sym i) | ELam Var (Exp i) | EApp (Exp i) (Exp i) | ECase (Exp i) (NonEmpty (Alt i))
   deriving Show
-
--- pattern ECon con = ESym (SymCon con)
--- pattern EVar var = ESym (SymVar var)
 
 data Alt i = Alt DataCon [Var] (Exp i)
   deriving Show
