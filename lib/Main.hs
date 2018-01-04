@@ -1,6 +1,6 @@
 module Main where
 
-import Types
+import Inference.Engine
 
 main :: IO ()
 main = tests
