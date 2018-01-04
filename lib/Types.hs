@@ -36,9 +36,10 @@ data Sym i = SymCon DataCon | SymVar Var deriving (Eq, Ord, Show)
 
 -- | Primitive types.
 data PrimTy = PrimInt | PrimBool
-  deriving Show
+  deriving (Show,Eq)
 
 data Ct i = CtTriv | CtConj (Ct i) (Ct i) | CtEq (Mono i) (Mono i)
+  deriving (Eq)
 newtype Prog i = Prog [Decl i]
   deriving Show
 data Decl i = Decl Var (Exp i) | DeclAnn Var (Poly i) (Exp i)
@@ -50,6 +51,7 @@ data Mono i
   | MonoList [Mono i]
   | MonoConApp TyCon [Mono i]
   | MonoFun (Mono i) (Mono i)
+  deriving (Eq)
 
 data Poly i = Forall [SkolVar] (Ct i) (Mono i)
   deriving Show
@@ -92,7 +94,6 @@ instance Show (Mono i) where
   showsPrec n (MonoConApp (TyCon con) ms) = showString (Text.unpack con) . showList ms
   showsPrec n (MonoFun l r) = showParen (n > 0) (showsPrec 1 l . showString " -> " . shows r)
 
-
 --
 
 fresh :: TcM i Int
@@ -101,8 +102,18 @@ fresh = do
   modify (\t -> t { supply = x + 1 })
   pure x
 
+freshUnifVarHint :: Text -> TcM i UnifVar
+freshUnifVarHint t = do
+  x <- fresh
+  pure (UnifVar (t <> tshow x))
+
 freshUnif :: TcM i TyVar
 freshUnif = freshUnifHint "u"
+
+freshSkol :: Text -> TcM i SkolVar
+freshSkol t = do
+  x <- fresh
+  pure (SkolVar (t <> tshow x))
 
 freshUnifHint :: Text -> TcM i TyVar
 freshUnifHint t = do
@@ -171,10 +182,6 @@ cstConj :: Ct i -> Ct i -> Ct i
 cstConj x      CtTriv = x
 cstConj CtTriv x      = x
 cstConj a      b      = CtConj a b
-
--- | [sch]; [env] |-> prog
-wellTyped :: Prog i -> TcM i ()
-wellTyped prog = pure ()
 
 tshow :: Show a => a -> Text
 tshow = Text.pack . show
@@ -271,10 +278,50 @@ getTyCon = \case
   MonoConApp con _ -> pure con
   _                -> Nothing
 
+fuvMono :: Mono i -> TcM i [UnifVar]
+fuvMono m = case m of
+  MonoVar (Unif v) -> pure [v]
+  MonoVar _ -> pure []
+  MonoPrim{} -> pure []
+  MonoFun l r -> (++) <$> fuvMono l <*> fuvMono r
+  MonoConApp _ ms -> concat <$> traverse fuvMono ms
+  MonoList ms -> concat <$> traverse fuvMono ms
+
+fuvCt :: Ct i -> TcM i [UnifVar]
+fuvCt ct = case ct of
+  CtTriv -> pure []
+  CtConj l r -> (++) <$> fuvCt l <*> fuvCt r
+  CtEq l r -> (++) <$> fuvMono l <*> fuvMono r
+
+-- | [sch]; [env] |-> prog
+wellTyped :: Prog i -> TcM i ()
+wellTyped (Prog []      ) = pure ()
+wellTyped (Prog (d:prog)) = go d
+  where
+    go (DeclAnn f p@(Forall as q tau) e) = do
+        (v       , GenCt q_wanted) <- infer e
+        (residual, theta         ) <- solve q (q_wanted /\ CtEq v tau)
+        assert (residual == CtTriv) (ErrText "residual constraints")
+        local (\t -> t { bindings = Map.insert (SymVar f) p (bindings t) })
+              (wellTyped (Prog prog))
+    go (Decl f e) = do
+        (tau, GenCt q_wanted) <- infer e
+        (q  , theta         ) <- solve CtTriv q_wanted
+        tau'                  <- instMono theta tau
+        ty                    <- do
+          fuv1 <- fuvMono tau'
+          fuv2 <- fuvCt q
+          let als = fuv1 ++ fuv2
+          as <- replicateM (length als) (freshSkol "sk")
+          let sub = zipWith (\al a -> (Unif al, MonoVar (Skol a))) als as
+          Forall as <$> instCt sub q <*> instMono sub tau'
+        local (\t -> t { bindings = Map.insert (SymVar f) ty (bindings t) })
+              (wellTyped (Prog prog))
+
 -- sch is given by the Reader environment.
 -- [sch]; given |->simp wanted ~> residual; unifier
-solve :: Ct i -> TcM i (Ct i, Ct i, Subst i)
-solve given = pure (wanted, residual, unifier)
+solve :: Ct i -> Ct i -> TcM i (Ct i, Subst i)
+solve given wanted = pure (residual, unifier)
  where
   wanted   = undefined
   residual = undefined
@@ -387,22 +434,6 @@ tests = do
     ( EApp (evar "id")
            (EApp (econ "MkPair") (EApp (econ "MkPair") (econ "MkPair")))
     )
-
-  putStrLn "\n\\def -> \\ma -> case ma of Nothing -> def; Just x -> x"
-  print $ runTc $ infer
-    ( ELam
-      (var "def")
-      ( ELam
-        (var "ma")
-        ( ECase
-          (evar "ma")
-          (  Alt (DataCon "Nothing") [] (evar "def")
-          :| [Alt (DataCon "Just") [var "x"] (evar "x")]
-          )
-        )
-      )
-    )
-
   putStrLn "\n\\def -> \\ma -> case ma of Just x -> x; Nothing -> def"
   print $ runTc $ infer
     ( ELam
@@ -417,6 +448,20 @@ tests = do
         )
       )
     )
+
+  let bdFromMaybe = ELam
+        (var "def")
+        ( ELam
+          (var "ma")
+          ( ECase
+            (evar "ma")
+            (  Alt (DataCon "Nothing") [] (evar "def")
+            :| [Alt (DataCon "Just") [var "x"] (evar "x")]
+            )
+          )
+        )
+  putStrLn "\n\\def -> \\ma -> case ma of Nothing -> def; Just x -> x"
+  print $ runTc $ infer bdFromMaybe
  where
   var  = Var
   evar = ESym . SymVar . Var
