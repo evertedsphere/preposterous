@@ -1,7 +1,7 @@
 name:                preposterous
 version:             0.1.0.0
 license:             GPL-3
-license-file:        LICENSE
+license-file:        LICENSE.md
 author:              Soham Chowdhury
 maintainer:          chow.soham@gmail.com
 category:            Language

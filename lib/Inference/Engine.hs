@@ -113,12 +113,10 @@ infer (ELam x e) = do
 
 infer (ECase e alts@(Alt dcon vs _:|_)) = do
   (tau, GenCt c) <- infer e
-
   beta           <- freshMono
-
   rhs            <- views bindings (Map.lookup (SymCon dcon))
   Forall _ _ ty  <- unwrap rhs (ErrText "nonexistent data constructor")
-  (_, tycon, as) <- unwrap (toTyCon ty) (ErrText "not a data constructor!")
+  (_, tycon, as) <- unwrap (toTConName ty) (ErrText "not a data constructor!")
   let num_gamma = length as
   gamma <- replicateM num_gamma freshMono
 
@@ -128,7 +126,7 @@ infer (ECase e alts@(Alt dcon vs _:|_)) = do
         Forall as_i _q_i fn <-
           views bindings (Map.lookup (SymCon k_i))
             >>= (`unwrap` ErrText "Unknown data-constructor in case")
-        (vs_i, tycon', _) <- unwrap (toTyCon fn) (ErrText "???")
+        (vs_i, tycon', _) <- unwrap (toTConName fn) (ErrText "???")
         assert
           (tycon == tycon')
           (ErrText "Datacon in match different from head con of expression")
@@ -152,8 +150,8 @@ unwrap ma err = maybe (throwError err) pure ma
 assert :: Bool -> TcErr -> TcM ()
 assert cond = unless cond . throwError
 
-toTyCon :: Mono -> Maybe ([Mono], TyCon, [Mono])
-toTyCon = go []
+toTConName :: Mono -> Maybe ([Mono], TConName, [Mono])
+toTConName = go []
  where
   go xs (MonoFun l r) = do
     (xs', con, as) <- go xs r
@@ -166,9 +164,9 @@ getTy m = case m of
   MonoConApp{} -> pure m
   _            -> Nothing
 
-getTyCon :: Mono -> Maybe TyCon
-getTyCon = \case
-  MonoFun    _   r -> getTyCon r
+getTConName :: Mono -> Maybe TConName
+getTConName = \case
+  MonoFun    _   r -> getTConName r
   MonoConApp con _ -> pure con
   _                -> Nothing
 
@@ -241,26 +239,26 @@ runTc ma = let (a, _, _) = runTcM initEnv initState ma in a
                     (MonoVar (Skol (SkolVar "t")))
           )
         )
-      , ( SymCon (DataCon "MkIntWrap")
+      , ( SymCon (DConName "MkIntWrap")
         , Forall
           []
           CtTriv
-          (MonoFun (MonoPrim PrimInt) (MonoConApp (TyCon "IntWrap") []))
+          (MonoFun (MonoPrim PrimInt) (MonoConApp (TConName "IntWrap") []))
         )
-      , (SymVar (Var "w"), poly (MonoConApp (TyCon "IntWrap") []))
-      , ( SymCon (DataCon "MkPair")
+      , (SymVar (Var "w"), poly (MonoConApp (TConName "IntWrap") []))
+      , ( SymCon (DConName "MkPair")
         , Forall
           [ska, skb]
           CtTriv
-          (MonoFun mska (MonoFun mskb (MonoConApp (TyCon "Pair") [mska, mskb])))
+          (MonoFun mska (MonoFun mskb (MonoConApp (TConName "Pair") [mska, mskb])))
         )
-      , scon "Nothing" (Forall [ska] CtTriv (MonoConApp (TyCon "Maybe") [mska]))
+      , scon "Nothing" (Forall [ska] CtTriv (MonoConApp (TConName "Maybe") [mska]))
       , scon
         "Just"
-        (Forall [ska] CtTriv (MonoFun mska (MonoConApp (TyCon "Maybe") [mska])))
+        (Forall [ska] CtTriv (MonoFun mska (MonoConApp (TConName "Maybe") [mska])))
       ]
     svar x rhs = (SymVar (Var x), rhs)
-    scon x rhs = (SymCon (DataCon x), rhs)
+    scon x rhs = (SymCon (DConName x), rhs)
     ska  = SkolVar "a"
     mska = MonoVar (Skol ska)
     skb  = SkolVar "b"
@@ -288,14 +286,14 @@ tests = do
 
   putStrLn "\ncase w of MkIntWrap x -> x"
   print $ runTc $ infer $ ECase (evar "w")
-                                (Alt (DataCon "MkIntWrap") [Var "x"] x :| [])
+                                (Alt (DConName "MkIntWrap") [Var "x"] x :| [])
 
   putStrLn "\ncase w of MkIntWrap x -> MkIntWrap x"
   print $ runTc $ infer $ ECase
     (evar "w")
-    (  Alt (DataCon "MkIntWrap")
+    (  Alt (DConName "MkIntWrap")
            [Var "x"]
-           (EApp (ESym (SymCon (DataCon "MkIntWrap"))) x)
+           (EApp (ESym (SymCon (DConName "MkIntWrap"))) x)
     :| []
     )
 
@@ -333,8 +331,8 @@ tests = do
         (var "ma")
         ( ECase
           (evar "ma")
-          (  Alt (DataCon "Nothing") [] (evar "def")
-          :| [Alt (DataCon "Just") [var "x"] (evar "x")]
+          (  Alt (DConName "Nothing") [] (evar "def")
+          :| [Alt (DConName "Just") [var "x"] (evar "x")]
           )
         )
       )
@@ -346,8 +344,8 @@ tests = do
           (var "ma")
           ( ECase
             (evar "ma")
-            (  Alt (DataCon "Nothing") [] (evar "def")
-            :| [Alt (DataCon "Just") [var "x"] (evar "x")]
+            (  Alt (DConName "Nothing") [] (evar "def")
+            :| [Alt (DConName "Just") [var "x"] (evar "x")]
             )
           )
         )
@@ -356,7 +354,7 @@ tests = do
  where
   var  = Var
   evar = ESym . SymVar . Var
-  econ = ESym . SymCon . DataCon
+  econ = ESym . SymCon . DConName
   n    = evar "n"
   x    = evar "x"
   y    = evar "y"

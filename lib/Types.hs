@@ -1,12 +1,12 @@
-{-# LANGUAGE OverloadedStrings   #-}
-{-# LANGUAGE PatternSynonyms     #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Types where
 
-import           Data.List.NonEmpty (NonEmpty)
-import           Data.Text          (Text)
-import qualified Data.Text          as Text
+import Data.List.NonEmpty (NonEmpty)
+import Data.Text (Text)
+import qualified Data.Text as Text
 
 -- Names
 newtype Var =
@@ -21,12 +21,12 @@ newtype SkolVar =
   SkolVar Text
   deriving (Eq)
 
-newtype DataCon =
-  DataCon Text
+newtype DConName =
+  DConName Text
   deriving (Eq, Ord, Show)
 
-newtype TyCon =
-  TyCon Text
+newtype TConName =
+  TConName Text
   deriving (Eq, Show)
 
 data TyVar
@@ -35,7 +35,7 @@ data TyVar
   deriving (Eq)
 
 data Sym
-  = SymCon DataCon
+  = SymCon DConName
   | SymVar Var
   deriving (Eq, Ord, Show)
 
@@ -47,10 +47,8 @@ data PrimTy
 
 data Ct
   = CtTriv
-  | CtConj Ct
-           Ct
-  | CtEq Mono
-         Mono
+  | CtConj Ct Ct
+  | CtEq Mono Mono
   deriving (Eq)
 
 newtype Prog =
@@ -58,21 +56,16 @@ newtype Prog =
   deriving (Show)
 
 data Decl
-  = Decl Var
-         Exp
-  | DeclAnn Var
-            Poly
-            Exp
+  = Decl Var Exp
+  | DeclAnn Var Poly Exp
   deriving (Show)
 
 data Mono
   = MonoVar TyVar
   | MonoPrim PrimTy
   | MonoList [Mono]
-  | MonoConApp TyCon
-               [Mono]
-  | MonoFun Mono
-            Mono
+  | MonoConApp TConName [Mono]
+  | MonoFun Mono Mono
   deriving (Eq)
 
 data Poly =
@@ -86,28 +79,22 @@ type Tau = Mono
 type Sigma = Poly
 
 data Exp
-  = ESym Sym
-  | ELam Var
-         Exp
-  | EApp Exp
-         Exp
-  | ECase Exp
-          (NonEmpty Alt)
+  = ESym Sym -- ^ Symbols
+  | ELam Var Exp -- ^ Lambda-abstraction
+  | EApp Exp Exp -- ^ Application
+  | ECase Exp (NonEmpty Alt) -- ^ Case-expressions
+  | ELet Var Exp Exp -- ^ Unannotated let
+  | EAnnLet Var Poly Exp Exp -- ^ Type-annotated let
   deriving (Show)
 
 data Alt =
-  Alt DataCon
-      [Var]
-      Exp
+  Alt DConName [Var] Exp
   deriving (Show)
 
 data AxiomSch
   = AxiomTriv
-  | AxiomConj AxiomSch
-              AxiomSch
-  | AxiomImp [SkolVar]
-             Ct
-             Ct
+  | AxiomConj AxiomSch AxiomSch
+  | AxiomImp [SkolVar] Ct Ct
   deriving (Show)
 
 type Subst = [(TyVar, Mono)]
@@ -138,7 +125,7 @@ instance Show Mono where
   showsPrec n (MonoVar v) = showsPrec n v
   showsPrec n (MonoPrim p) = showsPrec n p
   showsPrec n (MonoList ms) = showList ms
-  showsPrec n (MonoConApp (TyCon con) ms) =
+  showsPrec n (MonoConApp (TConName con) ms) =
     showString (Text.unpack con) . showList ms
   showsPrec n (MonoFun l r) =
     showParen (n > 0) (showsPrec 1 l . showString " -> " . shows r)
