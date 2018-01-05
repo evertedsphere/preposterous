@@ -1,5 +1,5 @@
 let 
-  rien = import ./util/rien/rien.nix {
+  rien = import /home/frob/code/rien/rien.nix {
     packageName = "preposterous";
     packagePath = ./.;
 
