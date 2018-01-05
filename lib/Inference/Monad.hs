@@ -1,6 +1,4 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE PatternSynonyms            #-}
-{-# LANGUAGE ScopedTypeVariables        #-}
 
 module Inference.Monad where
 
@@ -9,18 +7,19 @@ import           Control.Monad.Identity
 import           Control.Monad.RWS.Strict hiding (Alt (..))
 import           Data.Map                 (Map)
 import           Data.Text                (Text)
+import           Control.Lens
 
 import           Types
 
 data TcEnv i = TcEnv
-  { bindings       :: Map (Sym i) (Poly i)
-  , topLevelAxioms :: AxiomSch i
+  { _bindings       :: Map (Sym i) (Poly i)
+  , _topLevelAxioms :: AxiomSch i
   }
 
 type TcWriter i = ()
 
 data TcState i = TcState
-  { supply :: Int
+  { _supply :: Int -- ^ For `fresh` things. TODO use concurrent-supply?
   }
 
 data TcErr =
@@ -38,3 +37,12 @@ newtype TcM i a = TcM
              , MonadRWS (TcEnv i) (TcWriter i) (TcState i)
              , MonadError TcErr
              )
+
+bindings :: Lens' (TcEnv i) (Map (Sym i) (Poly i))
+bindings = lens _bindings (\t b -> t { _bindings = b })
+
+topLevelAxioms :: Lens' (TcEnv i) (AxiomSch i)
+topLevelAxioms = lens _topLevelAxioms (\t b -> t { _topLevelAxioms = b })
+
+supply :: Lens' (TcState i) Int
+supply = lens _supply (\t b -> t { _supply = b })

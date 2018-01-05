@@ -1,24 +1,25 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE PatternSynonyms     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Inference.Engine where
 
 import           Control.Monad.Except
 import           Control.Monad.RWS.Strict hiding (Alt (..))
+import           Data.List.NonEmpty       (NonEmpty (..))
 import qualified Data.Map                 as Map
-import qualified Data.Text                as Text
 import           Data.Text                (Text)
+import qualified Data.Text                as Text
 import           Data.Traversable
-import           Data.List.NonEmpty (NonEmpty(..))
+import Control.Lens
 
-import Types
-import Inference.Monad
+import           Inference.Monad
+import           Types
 
 fresh :: TcM i Int
 fresh = do
-  x <- gets supply
-  modify (\t -> t { supply = x + 1 })
+  x <- use supply
+  supply += 1
   pure x
 
 freshUnifVarHint :: Text -> TcM i UnifVar
@@ -88,7 +89,7 @@ tshow = Text.pack . show
 -- [env] |-> e : typ ~> gen
 infer :: forall i . Exp i -> TcM i (Mono i, GenCt i)
 infer (ESym sym) = do
-  rhs <- asks (Map.lookup sym . bindings)
+  rhs <- views bindings (Map.lookup sym)
   case rhs of
     Nothing                  -> throwError (ErrText "Unknown symbol")
     Just (Forall as q1 tau1) -> do
@@ -110,7 +111,7 @@ infer (EApp e1 e2) = do
 infer (ELam x e) = do
   alpha    <- freshMono
   (tau, c) <- local
-    (\t -> t { bindings = Map.insert (SymVar x) (poly alpha) (bindings t) })
+    (bindings %~ Map.insert (SymVar x) (poly alpha))
     (infer e)
   pure (MonoFun alpha tau, c)
 
@@ -119,7 +120,7 @@ infer (ECase e alts@(Alt dcon vs _:|_)) = do
 
   beta           <- freshMono
 
-  rhs            <- asks (Map.lookup (SymCon dcon) . bindings)
+  rhs            <- views bindings (Map.lookup (SymCon dcon))
   Forall _ _ ty  <- unwrap rhs (ErrText "nonexistent data constructor")
   (_, tycon, as) <- unwrap (toTyCon ty) (ErrText "not a data constructor!")
   let num_gamma = length as
@@ -129,7 +130,7 @@ infer (ECase e alts@(Alt dcon vs _:|_)) = do
   let go :: Ct i -> Alt i -> TcM i (Ct i)
       go ct_prev (Alt k_i xs_i e_i) = do
         Forall as_i _q_i fn <-
-          asks (Map.lookup (SymCon k_i) . bindings)
+          views bindings (Map.lookup (SymCon k_i))
             >>= (`unwrap` ErrText "Unknown data-constructor in case")
         (vs_i, tycon', _) <- unwrap (toTyCon fn) (ErrText "???")
         assert
@@ -142,7 +143,7 @@ infer (ECase e alts@(Alt dcon vs _:|_)) = do
           pure (SymVar x, poly v')
 
         (tau_i, GenCt ct_i) <- local
-          (\t -> t { bindings = Map.union (Map.fromList bds) (bindings t) })
+          (bindings %~ Map.union (Map.fromList bds))
           (infer e_i)
         let ct_new = ct_prev /\ CtEq beta tau_i
         pure ct_new
@@ -178,42 +179,42 @@ getTyCon = \case
 fuvMono :: Mono i -> TcM i [UnifVar]
 fuvMono m = case m of
   MonoVar (Unif v) -> pure [v]
-  MonoVar _ -> pure []
-  MonoPrim{} -> pure []
-  MonoFun l r -> (++) <$> fuvMono l <*> fuvMono r
-  MonoConApp _ ms -> concat <$> traverse fuvMono ms
-  MonoList ms -> concat <$> traverse fuvMono ms
+  MonoVar _        -> pure []
+  MonoPrim{}       -> pure []
+  MonoFun    l r   -> (++) <$> fuvMono l <*> fuvMono r
+  MonoConApp _ ms  -> concat <$> traverse fuvMono ms
+  MonoList ms      -> concat <$> traverse fuvMono ms
 
 fuvCt :: Ct i -> TcM i [UnifVar]
 fuvCt ct = case ct of
-  CtTriv -> pure []
+  CtTriv     -> pure []
   CtConj l r -> (++) <$> fuvCt l <*> fuvCt r
-  CtEq l r -> (++) <$> fuvMono l <*> fuvMono r
+  CtEq   l r -> (++) <$> fuvMono l <*> fuvMono r
 
 -- | [sch]; [env] |-> prog
 wellTyped :: Prog i -> TcM i ()
 wellTyped (Prog []      ) = pure ()
 wellTyped (Prog (d:prog)) = go d
-  where
-    go (DeclAnn f p@(Forall as q tau) e) = do
-        (v       , GenCt q_wanted) <- infer e
-        (residual, theta         ) <- solve q (q_wanted /\ CtEq v tau)
-        assert (residual == CtTriv) (ErrText "residual constraints")
-        local (\t -> t { bindings = Map.insert (SymVar f) p (bindings t) })
-              (wellTyped (Prog prog))
-    go (Decl f e) = do
-        (tau, GenCt q_wanted) <- infer e
-        (q  , theta         ) <- solve CtTriv q_wanted
-        tau'                  <- instMono theta tau
-        ty                    <- do
-          fuv1 <- fuvMono tau'
-          fuv2 <- fuvCt q
-          let als = fuv1 ++ fuv2
-          as <- replicateM (length als) (freshSkol "sk")
-          let sub = zipWith (\al a -> (Unif al, MonoVar (Skol a))) als as
-          Forall as <$> instCt sub q <*> instMono sub tau'
-        local (\t -> t { bindings = Map.insert (SymVar f) ty (bindings t) })
-              (wellTyped (Prog prog))
+ where
+  go (DeclAnn f p@(Forall as q tau) e) = do
+    (v       , GenCt q_wanted) <- infer e
+    (residual, theta         ) <- solve q (q_wanted /\ CtEq v tau)
+    assert (residual == CtTriv) (ErrText "residual constraints")
+    local (bindings %~ Map.insert (SymVar f) p)
+          (wellTyped (Prog prog))
+  go (Decl f e) = do
+    (tau, GenCt q_wanted) <- infer e
+    (q  , theta         ) <- solve CtTriv q_wanted
+    tau'                  <- instMono theta tau
+    ty                    <- do
+      fuv1 <- fuvMono tau'
+      fuv2 <- fuvCt q
+      let als = fuv1 ++ fuv2
+      as <- replicateM (length als) (freshSkol "sk")
+      let sub = zipWith (\al a -> (Unif al, MonoVar (Skol a))) als as
+      Forall as <$> instCt sub q <*> instMono sub tau'
+    local (bindings %~ Map.insert (SymVar f) ty)
+          (wellTyped (Prog prog))
 
 -- sch is given by the Reader environment.
 -- [sch]; given |->simp wanted ~> residual; unifier

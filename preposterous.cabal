@@ -11,6 +11,6 @@ cabal-version:       >=1.10
 executable preposterous
   main-is:             Main.hs
   other-modules:       Inference.Monad, Inference.Engine, Types
-  build-depends:       base, text, containers, mtl, prettyprinter, bound
+  build-depends:       base, text, containers, mtl, prettyprinter, bound, lens
   hs-source-dirs:      lib
   default-language:    Haskell2010
