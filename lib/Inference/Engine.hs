@@ -43,19 +43,17 @@ freshUnifHint t = do
 freshMono :: TcM Mono
 freshMono = MonoVar <$> freshUnif
 
-simpleCt :: GenCt -> Ct
+simpleCt :: GenCt -> [Ct]
 simpleCt = \case
-  GenImplic{} -> CtTriv
-  GenSimp x   -> x
-  GenConj l r -> simpleCt l /\ simpleCt r
+  GenImplic{} -> [CtTriv]
+  GenSimp x   -> [x]
+  GenConj l r -> simpleCt l ++ simpleCt r
 
-implicationCt :: GenCt -> GenCt
+implicationCt :: GenCt -> [GenCt]
 implicationCt ct = case ct of
-  GenImplic{} -> ct
-  GenSimp{}   -> GenSimp CtTriv
-  GenConj l r -> implicationCt l /\ implicationCt r
-
-freeUnifVars = undefined
+  GenImplic{} -> [ct]
+  GenSimp{}   -> [GenSimp CtTriv]
+  GenConj l r -> implicationCt l ++ implicationCt r
 
 instMono :: Subst -> Mono -> TcM Mono
 instMono unif ty = foldM (\t (v, r) -> instMono1 v r t) ty unif
@@ -75,6 +73,9 @@ instCt unif cst = foldM (\c (v, r) -> instCt1 v r c) cst unif
     CtTriv     -> pure ct
     CtConj x y -> CtConj <$> instCt1 v r x <*> instCt1 v r y
     CtEq   m n -> CtEq <$> instMono1 v r m <*> instMono1 v r n
+
+instGenCt :: Subst -> GenCt -> TcM GenCt
+instGenCt = undefined
 
 poly :: Mono -> Poly
 poly = Forall [] CtTriv
@@ -200,21 +201,27 @@ fuvCt ct = case ct of
   CtConj l r -> (++) <$> fuvCt l <*> fuvCt r
   CtEq   l r -> (++) <$> fuvMono l <*> fuvMono r
 
+-- | fuv(T,C)
+fuvIn :: Mono -> GenCt -> TcM [UnifVar]
+fuvIn = undefined
+
 -- | [sch]; [env] |-> prog
 wellTyped :: Prog -> TcM ()
 wellTyped (Prog []      ) = pure ()
 wellTyped (Prog (d:prog)) = go d
  where
   go (DeclAnn f p@(Forall as q tau) e) = do
-    (v       , GenSimp q_wanted) <- infer e
-    (residual, theta           ) <- solve q (q_wanted /\ CtEq v tau)
+    (v, q_wanted)     <- infer e
+    fuvs              <- fuvIn v q_wanted
+    (residual, theta) <- solve q fuvs (q_wanted /\ GenSimp (CtEq v tau))
     assert (residual == CtTriv) (ErrText "residual constraints")
     local (bindings %~ Map.insert (SymVar f) p) (wellTyped (Prog prog))
   go (Decl f e) = do
-    (tau, GenSimp q_wanted) <- infer e
-    (q  , theta           ) <- solve CtTriv q_wanted
-    tau'                    <- instMono theta tau
-    ty                      <- do
+    (tau, q_wanted) <- infer e
+    fuvs            <- fuvIn tau q_wanted
+    (q, theta)      <- solve CtTriv fuvs q_wanted
+    tau'            <- instMono theta tau
+    ty              <- do
       fuv1 <- fuvMono tau'
       fuv2 <- fuvCt q
       let als = fuv1 ++ fuv2
@@ -224,13 +231,24 @@ wellTyped (Prog (d:prog)) = go d
     local (bindings %~ Map.insert (SymVar f) ty) (wellTyped (Prog prog))
 
 -- sch is given by the Reader environment.
--- [sch]; given |->simp wanted ~> residual; unifier
-solve :: Ct -> Ct -> TcM (Ct, Subst)
-solve given wanted = pure (residual, unifier)
+-- [sch]; given |->solv wanted ~> residual; unifier
+solve :: Ct -> [UnifVar] -> GenCt -> TcM (Ct, Subst)
+solve q_given als_tch c_wanted = do
+  let simple = simpleCt c_wanted
+  (qr, theta) <- simplify q_given als_tch (foldr (/\) CtTriv simple)
+  implics <- implicationCt <$> instGenCt theta c_wanted
+  -- FIXME
+  pure (residual, unifier)
  where
   wanted   = undefined
   residual = undefined
   unifier  = undefined
+
+simplify :: Ct -> [UnifVar] -> Ct -> TcM (Ct, Subst)
+simplify q_given als_tch q_wanted = pure (q_residual, theta)
+  where
+    q_residual = undefined
+    theta = undefined
 
 runTcM :: TcEnv -> TcState -> TcM a -> (Either TcErr a, TcState, TcWriter)
 runTcM r s ma = runRWS (runExceptT (unTcM ma)) r s
