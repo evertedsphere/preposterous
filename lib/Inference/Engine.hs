@@ -16,42 +16,42 @@ import Control.Lens
 import           Inference.Monad
 import           Types
 
-fresh :: TcM i Int
+fresh :: TcM Int
 fresh = do
   x <- use supply
   supply += 1
   pure x
 
-freshUnifVarHint :: Text -> TcM i UnifVar
+freshUnifVarHint :: Text -> TcM UnifVar
 freshUnifVarHint t = do
   x <- fresh
   pure (UnifVar (t <> tshow x))
 
-freshUnif :: TcM i TyVar
+freshUnif :: TcM TyVar
 freshUnif = freshUnifHint "u"
 
-freshSkol :: Text -> TcM i SkolVar
+freshSkol :: Text -> TcM SkolVar
 freshSkol t = do
   x <- fresh
   pure (SkolVar (t <> tshow x))
 
-freshUnifHint :: Text -> TcM i TyVar
+freshUnifHint :: Text -> TcM TyVar
 freshUnifHint t = do
   x <- fresh
   pure (Unif (UnifVar (t <> tshow x)))
 
-freshMono :: TcM i (Mono i)
+freshMono :: TcM Mono
 freshMono = MonoVar <$> freshUnif
 
-simple :: GenCt i -> Ct i
+simple :: GenCt -> Ct
 simple (GenCt x) = x
 
 freeUnifVars = undefined
 
-instMono :: forall i . Subst i -> Mono i -> TcM i (Mono i)
+instMono :: Subst -> Mono -> TcM Mono
 instMono unif ty = foldM (\t (v, r) -> instMono1 v r t) ty unif
 
-instMono1 :: TyVar -> Mono i -> Mono i -> TcM i (Mono i)
+instMono1 :: TyVar -> Mono -> Mono -> TcM Mono
 instMono1 v r ty = case ty of
   MonoVar v'        -> pure $ if v == v' then r else ty
   MonoPrim{}        -> pure ty
@@ -59,7 +59,7 @@ instMono1 v r ty = case ty of
   MonoConApp con ms -> MonoConApp con <$> traverse (instMono1 v r) ms
   MonoFun    x   y  -> MonoFun <$> instMono1 v r x <*> instMono1 v r y
 
-instCt :: Subst i -> Ct i -> TcM i (Ct i)
+instCt :: Subst -> Ct -> TcM Ct
 instCt unif cst = foldM (\c (v, r) -> instCt1 v r c) cst unif
  where
   instCt1 v r ct = case ct of
@@ -67,19 +67,17 @@ instCt unif cst = foldM (\c (v, r) -> instCt1 v r c) cst unif
     CtConj x y -> CtConj <$> instCt1 v r x <*> instCt1 v r y
     CtEq   m n -> CtEq <$> instMono1 v r m <*> instMono1 v r n
 
-poly :: Mono i -> Poly i
+poly :: Mono -> Poly
 poly = Forall [] CtTriv
 
 infixr /\
 class Conj a where
   (/\) :: a -> a -> a
 
-instance Conj (Ct i) where (/\) = cstConj
-
-cstConj :: Ct i -> Ct i -> Ct i
-cstConj x      CtTriv = x
-cstConj CtTriv x      = x
-cstConj a      b      = CtConj a b
+instance Conj Ct where
+  x      /\ CtTriv = x
+  CtTriv /\ x      = x
+  a      /\ b      = CtConj a b
 
 tshow :: Show a => a -> Text
 tshow = Text.pack . show
@@ -87,7 +85,7 @@ tshow = Text.pack . show
 -- | Constraint generation
 --
 -- [env] |-> e : typ ~> gen
-infer :: forall i . Exp i -> TcM i (Mono i, GenCt i)
+infer :: Exp -> TcM (Mono, GenCt)
 infer (ESym sym) = do
   rhs <- views bindings (Map.lookup sym)
   case rhs of
@@ -110,9 +108,7 @@ infer (EApp e1 e2) = do
 
 infer (ELam x e) = do
   alpha    <- freshMono
-  (tau, c) <- local
-    (bindings %~ Map.insert (SymVar x) (poly alpha))
-    (infer e)
+  (tau, c) <- local (bindings %~ Map.insert (SymVar x) (poly alpha)) (infer e)
   pure (MonoFun alpha tau, c)
 
 infer (ECase e alts@(Alt dcon vs _:|_)) = do
@@ -127,7 +123,7 @@ infer (ECase e alts@(Alt dcon vs _:|_)) = do
   gamma <- replicateM num_gamma freshMono
 
   let c' = CtEq (MonoConApp tycon gamma) tau /\ c
-  let go :: Ct i -> Alt i -> TcM i (Ct i)
+  let go :: Ct -> Alt -> TcM Ct
       go ct_prev (Alt k_i xs_i e_i) = do
         Forall as_i _q_i fn <-
           views bindings (Map.lookup (SymCon k_i))
@@ -150,13 +146,13 @@ infer (ECase e alts@(Alt dcon vs _:|_)) = do
   ct <- foldM go c' alts
   pure (beta, GenCt ct)
 
-unwrap :: Maybe a -> TcErr -> TcM i a
+unwrap :: Maybe a -> TcErr -> TcM a
 unwrap ma err = maybe (throwError err) pure ma
 
-assert :: Bool -> TcErr -> TcM i ()
+assert :: Bool -> TcErr -> TcM ()
 assert cond = unless cond . throwError
 
-toTyCon :: Mono i -> Maybe ([Mono i], TyCon, [Mono i])
+toTyCon :: Mono -> Maybe ([Mono], TyCon, [Mono])
 toTyCon = go []
  where
   go xs (MonoFun l r) = do
@@ -164,19 +160,19 @@ toTyCon = go []
     pure (l : xs', con, as)
   go xs (MonoConApp con as) = pure ([], con, as)
 
-getTy :: Mono i -> Maybe (Mono i)
+getTy :: Mono -> Maybe Mono
 getTy m = case m of
   MonoFun _ r  -> getTy r
   MonoConApp{} -> pure m
   _            -> Nothing
 
-getTyCon :: Mono i -> Maybe TyCon
+getTyCon :: Mono -> Maybe TyCon
 getTyCon = \case
   MonoFun    _   r -> getTyCon r
   MonoConApp con _ -> pure con
   _                -> Nothing
 
-fuvMono :: Mono i -> TcM i [UnifVar]
+fuvMono :: Mono -> TcM [UnifVar]
 fuvMono m = case m of
   MonoVar (Unif v) -> pure [v]
   MonoVar _        -> pure []
@@ -185,14 +181,14 @@ fuvMono m = case m of
   MonoConApp _ ms  -> concat <$> traverse fuvMono ms
   MonoList ms      -> concat <$> traverse fuvMono ms
 
-fuvCt :: Ct i -> TcM i [UnifVar]
+fuvCt :: Ct -> TcM [UnifVar]
 fuvCt ct = case ct of
   CtTriv     -> pure []
   CtConj l r -> (++) <$> fuvCt l <*> fuvCt r
   CtEq   l r -> (++) <$> fuvMono l <*> fuvMono r
 
 -- | [sch]; [env] |-> prog
-wellTyped :: Prog i -> TcM i ()
+wellTyped :: Prog -> TcM ()
 wellTyped (Prog []      ) = pure ()
 wellTyped (Prog (d:prog)) = go d
  where
@@ -200,8 +196,7 @@ wellTyped (Prog (d:prog)) = go d
     (v       , GenCt q_wanted) <- infer e
     (residual, theta         ) <- solve q (q_wanted /\ CtEq v tau)
     assert (residual == CtTriv) (ErrText "residual constraints")
-    local (bindings %~ Map.insert (SymVar f) p)
-          (wellTyped (Prog prog))
+    local (bindings %~ Map.insert (SymVar f) p) (wellTyped (Prog prog))
   go (Decl f e) = do
     (tau, GenCt q_wanted) <- infer e
     (q  , theta         ) <- solve CtTriv q_wanted
@@ -213,26 +208,24 @@ wellTyped (Prog (d:prog)) = go d
       as <- replicateM (length als) (freshSkol "sk")
       let sub = zipWith (\al a -> (Unif al, MonoVar (Skol a))) als as
       Forall as <$> instCt sub q <*> instMono sub tau'
-    local (bindings %~ Map.insert (SymVar f) ty)
-          (wellTyped (Prog prog))
+    local (bindings %~ Map.insert (SymVar f) ty) (wellTyped (Prog prog))
 
 -- sch is given by the Reader environment.
 -- [sch]; given |->simp wanted ~> residual; unifier
-solve :: Ct i -> Ct i -> TcM i (Ct i, Subst i)
+solve :: Ct -> Ct -> TcM (Ct, Subst)
 solve given wanted = pure (residual, unifier)
  where
   wanted   = undefined
   residual = undefined
   unifier  = undefined
 
-runTcM
-  :: TcEnv i -> TcState i -> TcM i a -> (Either TcErr a, TcState i, TcWriter i)
+runTcM :: TcEnv -> TcState -> TcM a -> (Either TcErr a, TcState, TcWriter)
 runTcM r s ma = runRWS (runExceptT (unTcM ma)) r s
 
-runTc :: TcM i a -> Either TcErr a
+runTc :: TcM a -> Either TcErr a
 runTc ma = let (a, _, _) = runTcM initEnv initState ma in a
  where
-  initEnv :: TcEnv i
+  initEnv :: TcEnv
   initEnv = TcEnv bd AxiomTriv
    where
     bd = Map.fromList
@@ -273,7 +266,7 @@ runTc ma = let (a, _, _) = runTcM initEnv initState ma in a
     skb  = SkolVar "b"
     mskb = MonoVar (Skol skb)
 
-  initState :: TcState i
+  initState :: TcState
   initState = TcState 0
 
 tests :: IO ()

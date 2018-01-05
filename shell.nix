@@ -10,9 +10,9 @@ let
     ghcVersion = "ghc822";
 
     overrides = rec {
-      jailbreak = [ "cabal-helper" "ghc-mod" "liquidhaskell" ];
-      skipHaddock = justStaticExecutables;
       skipTests = [ "ghc-mod" "hpack" ];
+      jailbreak = [ "cabal-helper" "ghc-mod" ];
+      skipHaddock = justStaticExecutables;
       justStaticExecutables = [ 
         "brittany" 
         "hpack"
@@ -25,7 +25,7 @@ let
 in
   rien.shell {
     # Generate Hoogle documentation?
-    wantHoogle = false;
+    wantHoogle = true;
 
     # Haskell dependencies
     deps = hsPkgs: with hsPkgs; [
@@ -38,6 +38,7 @@ in
       bound
       prettyprinter
       lens
+      deriving-compat
 
       # containers
       # logict

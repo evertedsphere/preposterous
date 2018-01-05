@@ -34,7 +34,7 @@ data TyVar
   | Skol SkolVar
   deriving (Eq)
 
-data Sym i
+data Sym
   = SymCon DataCon
   | SymVar Var
   deriving (Eq, Ord, Show)
@@ -45,77 +45,77 @@ data PrimTy
   | PrimBool
   deriving (Show, Eq)
 
-data Ct i
+data Ct
   = CtTriv
-  | CtConj (Ct i)
-           (Ct i)
-  | CtEq (Mono i)
-         (Mono i)
+  | CtConj Ct
+           Ct
+  | CtEq Mono
+         Mono
   deriving (Eq)
 
-newtype Prog i =
-  Prog [Decl i]
+newtype Prog =
+  Prog [Decl]
   deriving (Show)
 
-data Decl i
+data Decl
   = Decl Var
-         (Exp i)
+         Exp
   | DeclAnn Var
-            (Poly i)
-            (Exp i)
+            Poly
+            Exp
   deriving (Show)
 
-data Mono i
+data Mono
   = MonoVar TyVar
   | MonoPrim PrimTy
-  | MonoList [Mono i]
+  | MonoList [Mono]
   | MonoConApp TyCon
-               [Mono i]
-  | MonoFun (Mono i)
-            (Mono i)
+               [Mono]
+  | MonoFun Mono
+            Mono
   deriving (Eq)
 
-data Poly i =
+data Poly =
   Forall [SkolVar]
-         (Ct i)
-         (Mono i)
+         Ct
+         Mono
   deriving (Show)
 
 type Tau = Mono
 
 type Sigma = Poly
 
-data Exp i
-  = ESym (Sym i)
+data Exp
+  = ESym Sym
   | ELam Var
-         (Exp i)
-  | EApp (Exp i)
-         (Exp i)
-  | ECase (Exp i)
-          (NonEmpty (Alt i))
+         Exp
+  | EApp Exp
+         Exp
+  | ECase Exp
+          (NonEmpty Alt)
   deriving (Show)
 
-data Alt i =
+data Alt =
   Alt DataCon
       [Var]
-      (Exp i)
+      Exp
   deriving (Show)
 
-data AxiomSch i
+data AxiomSch
   = AxiomTriv
-  | AxiomConj (AxiomSch i)
-              (AxiomSch i)
+  | AxiomConj AxiomSch
+              AxiomSch
   | AxiomImp [SkolVar]
-             (Ct i)
-             (Ct i)
+             Ct
+             Ct
   deriving (Show)
 
-type Subst i = [(TyVar, Mono i)]
+type Subst = [(TyVar, Mono)]
 
-type Unifier i = [(UnifVar, Mono i)]
+type Unifier = [(UnifVar, Mono)]
 
-newtype GenCt i =
-  GenCt (Ct i)
+newtype GenCt =
+  GenCt Ct
   deriving (Show)
 
 instance Show UnifVar where
@@ -128,13 +128,13 @@ instance Show TyVar where
   showsPrec n (Unif v) = showsPrec n v
   showsPrec n (Skol v) = showsPrec n v
 
-instance Show (Ct i) where
+instance Show Ct where
   showsPrec _ CtTriv = shows ()
   showsPrec n (CtConj l r) = showsPrec n l . showString " /\\ " . showsPrec n r
   showsPrec n (CtEq l r) =
     showParen (n > 9) (showsPrec 9 l . showString " ~ " . showsPrec 9 r)
 
-instance Show (Mono i) where
+instance Show Mono where
   showsPrec n (MonoVar v) = showsPrec n v
   showsPrec n (MonoPrim p) = showsPrec n p
   showsPrec n (MonoList ms) = showList ms
