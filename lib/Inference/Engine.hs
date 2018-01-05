@@ -43,8 +43,17 @@ freshUnifHint t = do
 freshMono :: TcM Mono
 freshMono = MonoVar <$> freshUnif
 
-simple :: GenCt -> Ct
-simple (GenCt x) = x
+simpleCt :: GenCt -> Ct
+simpleCt = \case
+  GenImplic{} -> CtTriv
+  GenSimp x   -> x
+  GenConj l r -> simpleCt l /\ simpleCt r
+
+implicationCt :: GenCt -> GenCt
+implicationCt ct = case ct of
+  GenImplic{} -> ct
+  GenSimp{}   -> GenSimp CtTriv
+  GenConj l r -> implicationCt l /\ implicationCt r
 
 freeUnifVars = undefined
 
@@ -79,6 +88,12 @@ instance Conj Ct where
   CtTriv /\ x      = x
   a      /\ b      = CtConj a b
 
+instance Conj GenCt where
+  GenSimp x      /\ GenSimp y      = GenSimp (x /\ y)
+  x              /\ GenSimp CtTriv = x
+  GenSimp CtTriv /\ x              = x
+  a              /\ b              = GenConj a b
+
 tshow :: Show a => a -> Text
 tshow = Text.pack . show
 
@@ -97,14 +112,14 @@ infer (ESym sym) = do
         pure (Skol sk, MonoVar (Unif (UnifVar (v <> tshow ctr))))
       typ <- instMono als tau1
       gen <- instCt als q1
-      pure (typ, GenCt gen)
+      pure (typ, GenSimp gen)
 
 infer (EApp e1 e2) = do
-  (tau1, GenCt c1) <- infer e1
-  (tau2, GenCt c2) <- infer e2
-  alpha            <- freshMono
+  (tau1, GenSimp c1) <- infer e1
+  (tau2, GenSimp c2) <- infer e2
+  alpha              <- freshMono
   let cst = c1 /\ c2 /\ CtEq tau1 (MonoFun tau2 alpha)
-  pure (alpha, GenCt cst)
+  pure (alpha, GenSimp cst)
 
 infer (ELam x e) = do
   alpha    <- freshMono
@@ -112,11 +127,11 @@ infer (ELam x e) = do
   pure (MonoFun alpha tau, c)
 
 infer (ECase e alts@(Alt dcon vs _:|_)) = do
-  (tau, GenCt c) <- infer e
-  beta           <- freshMono
-  rhs            <- views bindings (Map.lookup (SymCon dcon))
-  Forall _ _ ty  <- unwrap rhs (ErrText "nonexistent data constructor")
-  (_, tycon, as) <- unwrap (toTConName ty) (ErrText "not a data constructor!")
+  (tau, GenSimp c) <- infer e
+  beta             <- freshMono
+  rhs              <- views bindings (Map.lookup (SymCon dcon))
+  Forall _ _ ty    <- unwrap rhs (ErrText "nonexistent data constructor")
+  (_, tycon, as)   <- unwrap (toTConName ty) (ErrText "not a data constructor!")
   let num_gamma = length as
   gamma <- replicateM num_gamma freshMono
 
@@ -136,13 +151,13 @@ infer (ECase e alts@(Alt dcon vs _:|_)) = do
           v' <- instMono sub v
           pure (SymVar x, poly v')
 
-        (tau_i, GenCt ct_i) <- local
+        (tau_i, GenSimp ct_i) <- local
           (bindings %~ Map.union (Map.fromList bds))
           (infer e_i)
         let ct_new = ct_prev /\ CtEq beta tau_i
         pure ct_new
   ct <- foldM go c' alts
-  pure (beta, GenCt ct)
+  pure (beta, GenSimp ct)
 
 unwrap :: Maybe a -> TcErr -> TcM a
 unwrap ma err = maybe (throwError err) pure ma
@@ -191,15 +206,15 @@ wellTyped (Prog []      ) = pure ()
 wellTyped (Prog (d:prog)) = go d
  where
   go (DeclAnn f p@(Forall as q tau) e) = do
-    (v       , GenCt q_wanted) <- infer e
-    (residual, theta         ) <- solve q (q_wanted /\ CtEq v tau)
+    (v       , GenSimp q_wanted) <- infer e
+    (residual, theta           ) <- solve q (q_wanted /\ CtEq v tau)
     assert (residual == CtTriv) (ErrText "residual constraints")
     local (bindings %~ Map.insert (SymVar f) p) (wellTyped (Prog prog))
   go (Decl f e) = do
-    (tau, GenCt q_wanted) <- infer e
-    (q  , theta         ) <- solve CtTriv q_wanted
-    tau'                  <- instMono theta tau
-    ty                    <- do
+    (tau, GenSimp q_wanted) <- infer e
+    (q  , theta           ) <- solve CtTriv q_wanted
+    tau'                    <- instMono theta tau
+    ty                      <- do
       fuv1 <- fuvMono tau'
       fuv2 <- fuvCt q
       let als = fuv1 ++ fuv2
@@ -250,12 +265,18 @@ runTc ma = let (a, _, _) = runTcM initEnv initState ma in a
         , Forall
           [ska, skb]
           CtTriv
-          (MonoFun mska (MonoFun mskb (MonoConApp (TConName "Pair") [mska, mskb])))
+          ( MonoFun mska
+                    (MonoFun mskb (MonoConApp (TConName "Pair") [mska, mskb]))
+          )
         )
-      , scon "Nothing" (Forall [ska] CtTriv (MonoConApp (TConName "Maybe") [mska]))
+      , scon "Nothing"
+             (Forall [ska] CtTriv (MonoConApp (TConName "Maybe") [mska]))
       , scon
         "Just"
-        (Forall [ska] CtTriv (MonoFun mska (MonoConApp (TConName "Maybe") [mska])))
+        ( Forall [ska]
+                 CtTriv
+                 (MonoFun mska (MonoConApp (TConName "Maybe") [mska]))
+        )
       ]
     svar x rhs = (SymVar (Var x), rhs)
     scon x rhs = (SymCon (DConName x), rhs)

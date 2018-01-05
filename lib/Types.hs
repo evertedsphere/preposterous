@@ -101,8 +101,10 @@ type Subst = [(TyVar, Mono)]
 
 type Unifier = [(UnifVar, Mono)]
 
-newtype GenCt =
-  GenCt Ct
+data GenCt 
+  = GenSimp Ct                   -- ^ q
+  | GenConj GenCt GenCt          -- ^ c /\ c'
+  | GenImplic [UnifVar] Ct GenCt -- ^ exists as. q > c
   deriving (Show)
 
 instance Show UnifVar where
