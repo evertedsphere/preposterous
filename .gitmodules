@@ -1,0 +1,3 @@
+[submodule "util/rien"]
+	path = util/rien
+	url = https://github.com/mrkgnao/rien
