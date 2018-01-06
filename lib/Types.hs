@@ -29,6 +29,9 @@ newtype TConName =
   TConName Text
   deriving (Eq, Show)
 
+newtype ClassName = ClassName Text deriving (Eq, Show)
+newtype FamName = FamName Text deriving (Eq, Show)
+
 data TyVar
   = Unif UnifVar
   | Skol SkolVar
@@ -49,6 +52,7 @@ data Ct
   = CtTriv
   | CtConj Ct Ct
   | CtEq Mono Mono
+  | CtClass ClassName [Mono]
   deriving (Eq)
 
 newtype Prog =
@@ -66,6 +70,7 @@ data Mono
   | MonoList [Mono]
   | MonoConApp TConName [Mono]
   | MonoFun Mono Mono
+  | MonoFamApp FamName [Mono]
   deriving (Eq)
 
 data Poly =
@@ -92,16 +97,18 @@ data Alt =
   deriving (Show)
 
 data AxiomSch
-  = AxiomTriv
-  | AxiomConj AxiomSch AxiomSch
-  | AxiomImp [SkolVar] Ct Ct
+  = AxTriv
+  | AxConj AxiomSch AxiomSch
+  | AxClsInst [SkolVar] Ct ClassName [Mono]
+  -- The list of types should contain no family applications
+  | AxFamInst [SkolVar] FamName [Mono] Mono
   deriving (Show)
 
 type Subst = [(TyVar, Mono)]
 
 type Unifier = [(UnifVar, Mono)]
 
-data GenCt 
+data GenCt
   = GenSimp Ct                   -- ^ q
   | GenConj GenCt GenCt          -- ^ c /\ c'
   | GenImplic [UnifVar] Ct GenCt -- ^ exists as. q > c

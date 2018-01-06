@@ -261,7 +261,7 @@ runTc :: TcM a -> Either TcErr a
 runTc ma = let (a, _, _) = runTcM initEnv initState ma in a
  where
   initEnv :: TcEnv
-  initEnv = TcEnv bd AxiomTriv
+  initEnv = TcEnv bd AxTriv
    where
     bd = Map.fromList
       [ (SymVar (Var "n"), Forall [] CtTriv (MonoPrim PrimInt))
