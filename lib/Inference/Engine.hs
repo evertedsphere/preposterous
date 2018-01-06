@@ -11,6 +11,7 @@ import qualified Data.Map                 as Map
 import           Data.Text                (Text)
 import qualified Data.Text                as Text
 import           Data.Traversable
+import Data.Foldable
 import Control.Lens
 
 import           Inference.Monad
@@ -74,8 +75,13 @@ instCt unif cst = foldM (\c (v, r) -> instCt1 v r c) cst unif
     CtConj x y -> CtConj <$> instCt1 v r x <*> instCt1 v r y
     CtEq   m n -> CtEq <$> instMono1 v r m <*> instMono1 v r n
 
+-- TODO check als # fuv(theta)? even though the paper says
+-- the "side-condition is not significant algorithmically"
 instGenCt :: Subst -> GenCt -> TcM GenCt
-instGenCt = undefined
+instGenCt theta = \case
+  GenSimp ct        -> GenSimp <$> instCt theta ct
+  GenConj l r       -> GenConj <$> instGenCt theta l <*> instGenCt theta r
+  GenImplic als q c -> GenImplic als <$> instCt theta q <*> instGenCt theta c
 
 poly :: Mono -> Poly
 poly = Forall [] CtTriv
@@ -235,20 +241,18 @@ wellTyped (Prog (d:prog)) = go d
 solve :: Ct -> [UnifVar] -> GenCt -> TcM (Ct, Subst)
 solve q_given als_tch c_wanted = do
   let simple = simpleCt c_wanted
-  (qr, theta) <- simplify q_given als_tch (foldr (/\) CtTriv simple)
-  implics <- implicationCt <$> instGenCt theta c_wanted
-  -- FIXME
-  pure (residual, unifier)
- where
-  wanted   = undefined
-  residual = undefined
-  unifier  = undefined
+  (q_residual, theta) <- simplify q_given als_tch (foldr (/\) CtTriv simple)
+  implics             <- implicationCt <$> instGenCt theta c_wanted
+  for_ implics $ \(GenImplic als_i q_i c_i) -> do
+    (q_residual', _theta_i) <- solve (q_given /\ q_residual /\ q_i) als_tch c_i
+    assert (q_residual' == CtTriv) (ErrText "solve: residual constraints")
+  pure (q_residual, theta)
 
 simplify :: Ct -> [UnifVar] -> Ct -> TcM (Ct, Subst)
 simplify q_given als_tch q_wanted = pure (q_residual, theta)
-  where
-    q_residual = undefined
-    theta = undefined
+ where
+  q_residual = undefined
+  theta      = undefined
 
 runTcM :: TcEnv -> TcState -> TcM a -> (Either TcErr a, TcState, TcWriter)
 runTcM r s ma = runRWS (runExceptT (unTcM ma)) r s
