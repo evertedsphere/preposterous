@@ -5,7 +5,7 @@
 module Inference.Engine where
 
 import           Control.Monad.Except
-import           Control.Monad.RWS.Strict hiding (Alt (..))
+import           Control.Monad.RWS.Strict hiding (Alt (..),(<>))
 import           Data.List.NonEmpty       (NonEmpty (..))
 import qualified Data.Map                 as Map
 import           Data.Text                (Text)
@@ -13,6 +13,7 @@ import qualified Data.Text                as Text
 import           Data.Traversable
 import Data.Foldable
 import Control.Lens
+import Data.Semigroup
 
 import           Inference.Monad
 import           Types
@@ -86,20 +87,24 @@ instGenCt theta = \case
 poly :: Mono -> Poly
 poly = Forall [] CtTriv
 
-infixr /\
-class Conj a where
-  (/\) :: a -> a -> a
+instance Semigroup Ct where
+  x      <> CtTriv = x
+  CtTriv <> x      = x
+  a      <> b      = CtConj a b
 
-instance Conj Ct where
-  x      /\ CtTriv = x
-  CtTriv /\ x      = x
-  a      /\ b      = CtConj a b
+instance Semigroup GenCt where
+  GenSimp x      <> GenSimp y      = GenSimp (x <> y)
+  x              <> GenSimp CtTriv = x
+  GenSimp CtTriv <> x              = x
+  a              <> b              = GenConj a b
 
-instance Conj GenCt where
-  GenSimp x      /\ GenSimp y      = GenSimp (x /\ y)
-  x              /\ GenSimp CtTriv = x
-  GenSimp CtTriv /\ x              = x
-  a              /\ b              = GenConj a b
+instance Monoid Ct where
+  mempty = CtTriv
+  mappend = (<>)
+
+instance Monoid GenCt where
+  mempty = GenSimp mempty
+  mappend = (<>)
 
 tshow :: Show a => a -> Text
 tshow = Text.pack . show
@@ -125,7 +130,7 @@ infer (EApp e1 e2) = do
   (tau1, GenSimp c1) <- infer e1
   (tau2, GenSimp c2) <- infer e2
   alpha              <- freshMono
-  let cst = c1 /\ c2 /\ CtEq tau1 (MonoFun tau2 alpha)
+  let cst = c1 <> c2 <> CtEq tau1 (MonoFun tau2 alpha)
   pure (alpha, GenSimp cst)
 
 infer (ELam x e) = do
@@ -142,7 +147,7 @@ infer (ECase e alts@(Alt dcon vs _:|_)) = do
   let num_gamma = length as
   gamma <- replicateM num_gamma freshMono
 
-  let c' = CtEq (MonoConApp tycon gamma) tau /\ c
+  let c' = CtEq (MonoConApp tycon gamma) tau <> c
   let go :: Ct -> Alt -> TcM Ct
       go ct_prev (Alt k_i xs_i e_i) = do
         Forall as_i _q_i fn <-
@@ -161,7 +166,7 @@ infer (ECase e alts@(Alt dcon vs _:|_)) = do
         (tau_i, GenSimp ct_i) <- local
           (bindings %~ Map.union (Map.fromList bds))
           (infer e_i)
-        let ct_new = ct_prev /\ CtEq beta tau_i
+        let ct_new = ct_prev <> CtEq beta tau_i
         pure ct_new
   ct <- foldM go c' alts
   pure (beta, GenSimp ct)
@@ -193,7 +198,7 @@ getTConName = \case
   _                -> Nothing
 
 fuvMono :: Mono -> TcM [UnifVar]
-fuvMono m = case m of
+fuvMono = \case
   MonoVar (Unif v) -> pure [v]
   MonoVar _        -> pure []
   MonoPrim{}       -> pure []
@@ -202,14 +207,24 @@ fuvMono m = case m of
   MonoList ms      -> concat <$> traverse fuvMono ms
 
 fuvCt :: Ct -> TcM [UnifVar]
-fuvCt ct = case ct of
+fuvCt = \case
   CtTriv     -> pure []
   CtConj l r -> (++) <$> fuvCt l <*> fuvCt r
   CtEq   l r -> (++) <$> fuvMono l <*> fuvMono r
 
+fuvGenCt :: GenCt -> TcM [UnifVar]
+fuvGenCt = \case
+  GenSimp ct       -> fuvCt ct
+  GenConj l r      -> (++) <$> fuvGenCt l <*> fuvGenCt r
+  GenImplic uv q c -> do
+    fuvq <- fuvCt q
+    fuvc <- fuvGenCt c
+    pure (uv ++ fuvq ++ fuvc)
+
+
 -- | fuv(T,C)
 fuvIn :: Mono -> GenCt -> TcM [UnifVar]
-fuvIn = undefined
+fuvIn mono gct = (++) <$> fuvMono mono <*> fuvGenCt gct
 
 -- | [sch]; [env] |-> prog
 wellTyped :: Prog -> TcM ()
@@ -219,7 +234,7 @@ wellTyped (Prog (d:prog)) = go d
   go (DeclAnn f p@(Forall as q tau) e) = do
     (v, q_wanted)     <- infer e
     fuvs              <- fuvIn v q_wanted
-    (residual, theta) <- solve q fuvs (q_wanted /\ GenSimp (CtEq v tau))
+    (residual, theta) <- solve q fuvs (q_wanted <> GenSimp (CtEq v tau))
     assert (residual == CtTriv) (ErrText "residual constraints")
     local (bindings %~ Map.insert (SymVar f) p) (wellTyped (Prog prog))
   go (Decl f e) = do
@@ -241,18 +256,48 @@ wellTyped (Prog (d:prog)) = go d
 solve :: Ct -> [UnifVar] -> GenCt -> TcM (Ct, Subst)
 solve q_given als_tch c_wanted = do
   let simple = simpleCt c_wanted
-  (q_residual, theta) <- simplify q_given als_tch (foldr (/\) CtTriv simple)
+  (q_residual, theta) <- simplify q_given als_tch (mconcat simple)
   implics             <- implicationCt <$> instGenCt theta c_wanted
-  for_ implics $ \(GenImplic als_i q_i c_i) -> do
-    (q_residual', _theta_i) <- solve (q_given /\ q_residual /\ q_i) als_tch c_i
-    assert (q_residual' == CtTriv) (ErrText "solve: residual constraints")
+  for_ implics $ \case
+    GenImplic als_i q_i c_i -> do
+      (q_residual', _theta_i) <- solve (q_given <> q_residual <> q_i)
+                                       als_tch
+                                       c_i
+      assert (q_residual' == CtTriv) (ErrText "solve: residual constraints")
+    _ -> pure ()
   pure (q_residual, theta)
 
 simplify :: Ct -> [UnifVar] -> Ct -> TcM (Ct, Subst)
 simplify q_given als_tch q_wanted = pure (q_residual, theta)
  where
-  q_residual = undefined
-  theta      = undefined
+  q_residual = CtTriv
+  theta      = []
+
+data CtFlag = CtWanted | CtGiven
+
+rewriteCanon :: CtFlag -> Ct -> TcM (Maybe ([UnifVar], Subst, Ct))
+rewriteCanon _ (CtEq t1 t2) | t1 == t2 = do
+  pure (Just ([], [], CtTriv))
+rewriteCanon _ (CtEq (MonoConApp con ts) (MonoConApp con' ts'))
+  | con == con' = do
+    pure (Just ([], [], mconcat (zipWith CtEq ts ts')))
+  | otherwise = do
+    pure Nothing
+
+rewriteSimplify :: Ct -> Ct -> TcM Ct
+rewriteSimplify = undefined
+
+rewriteInteract :: CtFlag -> Ct -> Ct -> TcM Ct
+rewriteInteract = undefined
+
+rewriteTopReact :: CtFlag -> Ct -> TcM (Maybe ([UnifVar], Ct))
+rewriteTopReact = undefined
+
+prog :: Prog
+prog =
+  Prog [DeclAnn (Var "x") (poly (MonoPrim PrimInt)) (ESym (SymVar (Var "w")))]
+
+--
 
 runTcM :: TcEnv -> TcState -> TcM a -> (Either TcErr a, TcState, TcWriter)
 runTcM r s ma = runRWS (runExceptT (unTcM ma)) r s
@@ -394,6 +439,8 @@ tests = do
         )
   putStrLn "\n\\def -> \\ma -> case ma of Nothing -> def; Just x -> x"
   print $ runTc $ infer bdFromMaybe
+
+  print $ runTc $ wellTyped prog
  where
   var  = Var
   evar = ESym . SymVar . Var
