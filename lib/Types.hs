@@ -15,11 +15,11 @@ newtype Var =
 
 newtype UnifVar =
   UnifVar Text
-  deriving (Eq)
+  deriving (Eq, Ord)
 
 newtype SkolVar =
   SkolVar Text
-  deriving (Eq)
+  deriving (Eq, Ord)
 
 newtype DConName =
   DConName Text
@@ -35,7 +35,7 @@ newtype FamName = FamName Text deriving (Eq, Show)
 data TyVar
   = Unif UnifVar
   | Skol SkolVar
-  deriving (Eq)
+  deriving (Eq, Ord)
 
 data Sym
   = SymCon DConName
@@ -46,6 +46,9 @@ data Sym
 data PrimTy
   = PrimInt
   | PrimBool
+  deriving (Show, Eq)
+
+data PrimExp = EInt Int | EBool Bool
   deriving (Show, Eq)
 
 data Ct
@@ -73,10 +76,11 @@ data Mono
   | MonoFamApp FamName [Mono]
   deriving (Eq)
 
+newtype NoFamMono = NoFamMono Mono
+  deriving (Eq)
+
 data Poly =
-  Forall [SkolVar]
-         Ct
-         Mono
+  Forall [SkolVar] Ct Mono
   deriving (Show)
 
 type Tau = Mono
@@ -90,6 +94,7 @@ data Exp
   | ECase Exp (NonEmpty Alt) -- ^ Case-expressions
   | ELet Var Exp Exp -- ^ Unannotated let
   | EAnnLet Var Poly Exp Exp -- ^ Type-annotated let
+  | EPrim PrimExp 
   deriving (Show)
 
 data Alt =
@@ -100,8 +105,7 @@ data AxiomSch
   = AxTriv
   | AxConj AxiomSch AxiomSch
   | AxClsInst [SkolVar] Ct ClassName [Mono]
-  -- The list of types should contain no family applications
-  | AxFamInst [SkolVar] FamName [Mono] Mono
+  | AxFamInst [SkolVar] FamName [NoFamMono] Mono
   deriving (Show)
 
 type Subst = [(TyVar, Mono)]
@@ -138,3 +142,6 @@ instance Show Mono where
     showString (Text.unpack con) . showList ms
   showsPrec n (MonoFun l r) =
     showParen (n > 0) (showsPrec 1 l . showString " -> " . shows r)
+
+instance Show NoFamMono where
+  showsPrec n (NoFamMono m) = showsPrec n m
