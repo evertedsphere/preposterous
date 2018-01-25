@@ -383,9 +383,19 @@ simplify q_given als_tch q_wanted = recur $ do
 
 -- [sch]; als |-> (als, phi, q_g, q_w) -> (als', phi', q_g', q_w')
 rewrite :: [UnifVar] -> Unifier -> Ct -> Ct -> TcM (Maybe ([UnifVar], Unifier, Ct, Ct))
+-- intw
+rewrite als phi qg (CtConj (CtConj qw q1) q2) = do
+  q3 <- rewriteInteract CtWanted q1 q2
+  pure (Just (als, phi, qg, qw <> q3))
+-- intg
+rewrite als phi (CtConj (CtConj qg q1) q2) qw = do
+  q3 <- rewriteInteract CtGiven q1 q2
+  pure (Just (als, phi, qg <> q3, qw))
+-- cang
 rewrite als phi1 (CtConj qg q1) q_w = do
   Just (betas, phi2, q2) <- rewriteCanon CtGiven q1
   pure (Just (als ++ betas, phi1 ++ phi2, qg <> q2, q_w))
+-- canw
 rewrite als phi1 qg (CtConj qw q1) = do
   Just (betas, phi2, q2) <- rewriteCanon CtWanted q1
   pure (Just (als ++ betas, phi1 ++ phi2, qg, qw <> q2))
