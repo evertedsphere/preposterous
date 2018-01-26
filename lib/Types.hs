@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -7,6 +8,8 @@ module Types where
 import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Control.Lens (Lens')
+import Control.Monad.Reader
 
 -- Names
 newtype Var =
@@ -87,6 +90,10 @@ type Tau = Mono
 
 type Sigma = Poly
 
+data PrimOp 
+  = PrimAdd
+  deriving Show
+
 data Exp
   = ESym Sym -- ^ Symbols
   | ELam Var Exp -- ^ Lambda-abstraction
@@ -95,6 +102,7 @@ data Exp
   | ELet Var Exp Exp -- ^ Unannotated let
   | EAnnLet Var Poly Exp Exp -- ^ Type-annotated let
   | EPrim PrimExp 
+  | EPrimOp PrimOp
   deriving (Show)
 
 data Alt =
@@ -145,3 +153,18 @@ instance Show Mono where
 
 instance Show NoFamMono where
   showsPrec n (NoFamMono m) = showsPrec n m
+
+data LogItem = LogItem { _messageDepth :: !Int, _messageContents :: Message }
+
+instance Show LogItem where
+  show (LogItem d (MsgText m)) = show d ++ ": " ++ Text.unpack m
+  -- show (LogItem d m) = show d ++ ": " ++ show m
+
+newtype Message = MsgText Text
+  deriving Show
+
+type RecursionDepthM env m = (HasRecursionDepth env, MonadReader env m)
+
+class HasRecursionDepth env where
+  recursionDepth :: Lens' env Int
+

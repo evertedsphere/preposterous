@@ -1,34 +1,24 @@
-{-# LANGUAGE LambdaCase          #-}
-{-# LANGUAGE OverloadedStrings   #-}
-{-# LANGUAGE PatternSynonyms     #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ConstraintKinds       #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE LambdaCase            #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
 module Inference.Engine where
 
-import           Control.Monad.Except
-import           Control.Monad.RWS.Strict hiding (Alt (..),(<>))
-import           Data.List.NonEmpty       (NonEmpty (..))
-import qualified Data.Map                 as Map
-import           Data.Text                (Text)
-import qualified Data.Text                as Text
-import           Data.Traversable
-import qualified Data.List as List
-import Data.Foldable
-import Control.Lens hiding (rewrite)
-import Data.Semigroup
+import           Control.Lens    hiding (rewrite)
+import qualified Data.Map        as Map
+import qualified Data.Text       as Text
 
+import           Eval.Monad
 import           Inference.Monad
 import           Types
 
+import           Praeludium
 
 instance Semigroup Ct where
-  x      <> CtTriv = x
-  CtTriv <> x      = x
   a      <> b      = CtConj a b
 
 instance Semigroup GenCt where
-  GenSimp x      <> GenSimp y      = GenSimp (x <> y)
-  x              <> GenSimp CtTriv = x
-  GenSimp CtTriv <> x              = x
   a              <> b              = GenConj a b
 
 instance Monoid Ct where
@@ -41,9 +31,6 @@ instance Monoid GenCt where
 
 failWith :: TcErr -> TcM a
 failWith e = throwError [e]
-
-recur :: TcM a -> TcM a
-recur = local (recursionDepth +~ 1)
 
 fresh :: TcM Int
 fresh = do
@@ -117,14 +104,9 @@ poly = Forall [] CtTriv
 tshow :: Show a => a -> Text
 tshow = Text.pack . show
 
-logText :: Text -> TcM ()
-logText t = do
-  depth <- view recursionDepth
-  tell [LogItem depth (MsgText t)]
-
 fuvEnv :: TcM [UnifVar]
 fuvEnv = do
-  env <- view bindings
+  env <- view bindingTypes
   unsupported
 
 infer :: Exp -> TcM (Mono, GenCt)
@@ -134,6 +116,8 @@ infer e = recur (infer' e)
 --
 -- [env] |-> e : typ ~> gen
 infer' :: Exp -> TcM (Mono, GenCt)
+infer' (EPrimOp PrimAdd) = pure (MonoFun i (MonoFun i i), mempty)
+  where i = MonoPrim PrimInt
 -- FIXME run this by someone who Knows Things
 infer' (EPrim v) = do
   logText "EPrim"
@@ -145,7 +129,7 @@ infer' (EPrim v) = do
 
 infer' (ESym sym) = do
   logText "VarCon"
-  rhs <- views bindings (Map.lookup sym)
+  rhs <- views bindingTypes (Map.lookup sym)
   case rhs of
     Nothing                  -> failWith (ErrText "Unknown symbol")
     Just (Forall as q1 tau1) -> do
@@ -168,19 +152,19 @@ infer' (EApp e1 e2) = do
 infer' (ELam x e) = do
   logText "Abs"
   alpha    <- freshMono
-  (tau, c) <- local (bindings %~ Map.insert (SymVar x) (poly alpha)) (infer e)
+  (tau, c) <- local (bindingTypes %~ Map.insert (SymVar x) (poly alpha)) (infer e)
   pure (MonoFun alpha tau, c)
 
 infer' (ELet x e1 e2) = do
   logText "Let"
   (tau1, c1) <- infer e1
-  (tau2, c2) <- local (bindings %~ Map.insert (SymVar x) (poly tau1)) (infer e2)
+  (tau2, c2) <- local (bindingTypes %~ Map.insert (SymVar x) (poly tau1)) (infer e2)
   pure (tau2, c1 <> c2)
 
 infer' (EAnnLet x (Forall [] CtTriv tau1) e1 e2) = do
   logText "LetA"
   (tau, c1) <- infer e1
-  (tau2, c2) <- local (bindings %~ Map.insert (SymVar x) (poly tau1)) (infer e2)
+  (tau2, c2) <- local (bindingTypes %~ Map.insert (SymVar x) (poly tau1)) (infer e2)
   pure (tau2, c1 <> c2 <> GenSimp (CtEq tau tau1))
 
 infer' (EAnnLet x _sigma1@(Forall as q1 tau1) e1 e2) = do
@@ -192,14 +176,14 @@ infer' (EAnnLet x _sigma1@(Forall as q1 tau1) e1 e2) = do
     fuvg <- fuvEnv
     pure (filter (`notElem` fuvg) fuvtc)
   let c1 = GenImplic betas q1 (c <> GenSimp (CtEq tau tau1))
-  (tau2, c2) <- local (bindings %~ Map.insert (SymVar x) (poly tau1)) (infer e2)
+  (tau2, c2) <- local (bindingTypes %~ Map.insert (SymVar x) (poly tau1)) (infer e2)
   pure (tau2, c1 <> c2)
 
 infer' (ECase e alts@(Alt dcon vs _:|_)) = do
   logText "Case"
   (tau, GenSimp c) <- infer e
   beta             <- freshMono
-  rhs              <- views bindings (Map.lookup (SymCon dcon))
+  rhs              <- views bindingTypes (Map.lookup (SymCon dcon))
   Forall _ _ ty    <- unwrap rhs (ErrText "nonexistent data constructor")
   (_, tycon, as)   <- unwrap (toTConName ty) (ErrText "not a data constructor!")
   let num_gamma = length as
@@ -209,7 +193,7 @@ infer' (ECase e alts@(Alt dcon vs _:|_)) = do
   let go :: Ct -> Alt -> TcM Ct
       go ct_prev (Alt k_i xs_i e_i) = do
         Forall as_i _q_i fn <-
-          views bindings (Map.lookup (SymCon k_i))
+          views bindingTypes (Map.lookup (SymCon k_i))
             >>= (`unwrap` ErrText "Unknown data-constructor in case")
         (vs_i, tycon', _) <- unwrap (toTConName fn) (ErrText "???")
         assert
@@ -222,7 +206,7 @@ infer' (ECase e alts@(Alt dcon vs _:|_)) = do
           pure (SymVar x, poly v')
 
         (tau_i, GenSimp ct_i) <- local
-          (bindings %~ Map.union (Map.fromList bds))
+          (bindingTypes %~ Map.union (Map.fromList bds))
           (infer e_i)
         let ct_new = ct_prev <> CtEq beta tau_i
         pure ct_new
@@ -298,7 +282,7 @@ wellTyped' (Prog (d:prog)) = go d
     fuvs              <- fuvIn v q_wanted
     (residual, theta) <- solve q fuvs (q_wanted <> GenSimp (CtEq v tau))
     assert (residual == CtTriv) (ErrText "residual constraints")
-    local (bindings %~ Map.insert (SymVar f) p) (wellTyped (Prog prog))
+    local (bindingTypes %~ Map.insert (SymVar f) p) (wellTyped (Prog prog))
   go (Decl f e) = do
     logText "Bind"
     (tau, q_wanted) <- infer e
@@ -312,7 +296,7 @@ wellTyped' (Prog (d:prog)) = go d
       as <- replicateM (length als) (freshSkol "sk")
       let sub = zipWith (\al a -> (Unif al, MonoVar (Skol a))) als as
       Forall as <$> instCt sub q <*> instMono sub tau'
-    local (bindings %~ Map.insert (SymVar f) ty) (wellTyped (Prog prog))
+    local (bindingTypes %~ Map.insert (SymVar f) ty) (wellTyped (Prog prog))
 
 -- sch is given by the Reader environment.
 -- [sch]; given |->solv wanted ~> residual; unifier
@@ -364,7 +348,7 @@ simplify q_given als_tch q_wanted = recur $ do
   logText ("  " <> tshow als_tch)
   logText ("  " <> tshow q_wanted)
   Just (als', phi, qg', qw') <- rewrite als_tch [] q_given q_wanted
-  -- _E 
+  -- _E
   flattened <- instCt (map (\(u,m) -> (Unif u, m)) phi) qw'
   equationals <- for (ctEqs flattened) $ \case
     (b@(MonoVar (Unif beta)), tau) -> do
@@ -443,7 +427,7 @@ noFam = \case
   MonoFamApp{} -> False
   _            -> undefined
 
-assert' cond = assert cond . ErrText 
+assert' cond = assert cond . ErrText
 
 freeTyVars :: Mono -> TcM [TyVar]
 freeTyVars = \case
@@ -457,9 +441,9 @@ checkCanon (CtEq (MonoFamApp _ ms) r) = do
   assert (all noFam ms) (ErrText "noFam")
 checkCanon (CtClass _ xis) = assert (all noFam xis) (ErrText "noFam")
 checkCanon (CtEq v@(MonoVar tv) xi) = do
-  lex <- v `lexLt` xi 
+  lex <- v `lexLt` xi
   assert' lex "lex"
-  fxi <- freeTyVars xi 
+  fxi <- freeTyVars xi
   assert (tv `notElem` fxi) (ErrText "tv in ftv")
 
 lexLt :: Mono -> Mono -> TcM Bool
@@ -470,15 +454,79 @@ lexLt (MonoVar tv1) (MonoVar tv2) = pure (tv1 < tv2)
 lexLt (MonoVar _tv) xi | noFam xi = pure True
 lexLt _ _ = unsupported
 
-eval :: Exp -> Map.Map Text Exp -> Either Text Exp
-eval (ESym (SymVar (Var s))) env = case Map.lookup s env of
-                                     Just e -> pure e
-                                     Nothing -> Left "unbound"
+recur :: RecursionDepthM env m => m a -> m a
+recur = local (recursionDepth +~ 1)
 
-fromProg :: Prog -> Map.Map Text Exp
+-- body [v -> e]
+substExp :: Var -> Exp -> Exp -> Exp
+substExp v e body =
+  case body of
+    ESym (SymVar v') -> if v == v' then e else body
+    EApp x y         -> EApp (substExp v e x) (substExp v e y)
+    EPrimOp{}        -> body
+    EPrim{}          -> body
+
+whnf :: Exp -> EvalM Exp
+whnf e = case e of
+  EPrim{} -> pure e
+  ELam{} -> pure e
+  EPrimOp{} -> pure e
+  ESym (SymVar (Var s)) -> do
+    env <- view bindings
+    case Map.lookup s env of
+      Just e  -> pure e
+      Nothing -> throwError "unbound"
+  EApp f a -> do
+    w <- whnf f
+    case w of
+      ELam v e -> whnf (substExp v a e)
+      f'       -> pure (EApp f' a)
+
+-- whnf' :: Exp -> Prog -> Either Text Exp
+whnf' e p = runEvalM (fromProg p) (whnf e)
+
+logText :: (MonadWriter [LogItem] m, RecursionDepthM env m) => Text -> m ()
+logText t = do
+  depth <- view recursionDepth
+  tell [LogItem depth (MsgText t)]
+
+nf :: Exp -> EvalM Exp
+nf e = do
+  logText (tshow e)
+  recur (nf' e)
+
+nf' :: Exp -> EvalM Exp
+nf' e = case e of
+    EPrim{} -> pure e
+    EPrimOp{} -> pure e
+    ELam{} -> pure e
+    ESym (SymVar (Var s)) -> do
+      env <- view bindings
+      case Map.lookup s env of
+        Just e' -> pure e'
+        Nothing -> pure e
+    EApp (EApp (EPrimOp PrimAdd) v) w -> do
+      logText "EAppPrim"
+      EPrim (EInt v') <- nf v
+      EPrim (EInt w') <- nf w
+      pure (EPrim $ EInt $ v' + w')
+    EApp f a -> do
+      w <- nf f
+      case w of
+        ELam v e -> nf (substExp v a e)
+        f'       -> EApp <$> nf f' <*> nf a
+
+-- nfP :: Exp -> Prog -> Either Text Exp
+nfP e p = runEvalM (fromProg p) (nf e)
+
+elam v b = ELam (Var v) b
+exp_id = ELam (Var "x") (evar "x")
+two = EApp exp_id (EPrim (EInt 2))
+
+fromProg :: Prog -> Map Text Exp
 fromProg (Prog ds) = Map.fromList (map toPairs ds)
   where
-    toPairs (Decl (Var v) a) = (v, a)
+    toPairs (Decl (Var v) a)      = (v, a)
     toPairs (DeclAnn (Var v) _ a) = (v, a)
 
 --
@@ -548,7 +596,7 @@ tests = do
   runTc $ infer (evar "id")
 
   putStrLn "\n>>> \\x -> id x"
-  runTc $ infer (ELam (Var "x") (EApp (evar "id") (evar "x")))
+  runTc $ infer exp_id
 
   putStrLn "\n>>> idint"
   runTc $ infer (evar "idint")

@@ -2,39 +2,25 @@
 
 module Inference.Monad where
 
-import           Control.Applicative
-import           Control.Monad.Except
-import           Control.Monad.Identity
-import           Control.Monad.RWS.Strict hiding (Alt (..))
-import           Data.Map                 (Map)
-import           Data.Text                (Text)
 import qualified Data.Text
 import           Control.Lens
 
 import           Types
-
-data LogItem = LogItem { _messageDepth :: !Int, _messageContents :: Message }
-
-instance Show LogItem where
-  show (LogItem d (MsgText m)) = show d ++ ": " ++ Data.Text.unpack m
-  -- show (LogItem d m) = show d ++ ": " ++ show m
-
-data Message = MsgText Text
-  deriving Show
+import           Praeludium
 
 data TcEnv = TcEnv
-  { _bindings       :: Map Sym Poly
+  { _bindingTypes       :: Map Sym Poly
   , _topLevelAxioms :: AxiomSch
-  , _recursionDepth :: Int
+  , _tcRecursionDepth :: Int
   }
 
 type TcWriter = [LogItem]
 
-data TcState = TcState
+newtype TcState = TcState
   { _supply :: Int -- ^ For `fresh` things. TODO use concurrent-supply?
   }
 
-data TcErr =
+newtype TcErr =
   ErrText Text
   deriving (Show)
 
@@ -54,8 +40,8 @@ newtype TcM a = TcM
 runTcM :: TcEnv -> TcState -> TcM a -> (Either [TcErr] a, TcState, TcWriter)
 runTcM r s ma = runRWS (runExceptT (unTcM ma)) r s
 
-bindings :: Lens' TcEnv (Map Sym Poly)
-bindings = lens _bindings (\t b -> t { _bindings = b })
+bindingTypes :: Lens' TcEnv (Map Sym Poly)
+bindingTypes = lens _bindingTypes (\t b -> t { _bindingTypes = b })
 
 topLevelAxioms :: Lens' TcEnv AxiomSch
 topLevelAxioms = lens _topLevelAxioms (\t b -> t { _topLevelAxioms = b })
@@ -63,6 +49,8 @@ topLevelAxioms = lens _topLevelAxioms (\t b -> t { _topLevelAxioms = b })
 supply :: Lens' TcState Int
 supply = lens _supply (\t b -> t { _supply = b })
 
-recursionDepth :: Lens' TcEnv Int
-recursionDepth = lens _recursionDepth (\t b -> t { _recursionDepth = b })
+tcRecursionDepth :: Lens' TcEnv Int
+tcRecursionDepth = lens _tcRecursionDepth (\t b -> t { _tcRecursionDepth = b })
 
+instance HasRecursionDepth TcEnv where
+  recursionDepth = tcRecursionDepth

@@ -10,7 +10,7 @@ let
     ghcVersion = "ghc822";
 
     overrides = rec {
-      skipTests = [ "ghc-mod" "hpack" ];
+      skipTests = [ "ghc-mod" "hpack" "llvm-hs-pretty" ];
       jailbreak = [ "cabal-helper" "ghc-mod" ];
       skipHaddock = justStaticExecutables;
       justStaticExecutables = [ 
@@ -40,6 +40,9 @@ in
       lens
       deriving-compat
 
+      llvm-hs-pure
+      llvm-hs-pretty
+      llvm-hs-typed
       # containers
       # logict
       # QuickCheck
@@ -71,5 +74,6 @@ in
     # Native dependencies
     nativeDeps = pkgs: with pkgs; [ 
       # z3 
+      llvm_5
     ];
   }
